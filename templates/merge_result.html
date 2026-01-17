@@ -1,0 +1,14 @@
+{% if error %}
+<tr class="merge-error">
+    <td colspan="10">
+        <span class="error">Merge failed: {{ error }}</span>
+        <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+    </td>
+</tr>
+{% else %}
+<tr class="merge-success">
+    <td colspan="10">
+        Merged successfully! Created transfer from {{ source_name }} to {{ destination_name }}.
+    </td>
+</tr>
+{% endif %}

@@ -1,0 +1,52 @@
+{% if error %}
+<div class="error">{{ error }}</div>
+{% elif matches %}
+<h3>Found {{ matches|length }} matching pair(s)</h3>
+<table class="results-table">
+    <thead>
+        <tr>
+            <th colspan="3">Withdrawal</th>
+            <th>Amount</th>
+            <th colspan="3">Deposit</th>
+            <th>Days</th>
+            <th>Action</th>
+        </tr>
+        <tr>
+            <th>Date</th>
+            <th>From Account</th>
+            <th>Description</th>
+            <th></th>
+            <th>Date</th>
+            <th>To Account</th>
+            <th>Description</th>
+            <th></th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for match in matches %}
+        <tr id="row-{{ match.deposit.id }}-{{ match.withdrawal.id }}">
+            <td>{{ match.withdrawal_split.date.strftime('%Y-%m-%d') }}</td>
+            <td>{{ match.withdrawal_split.source_name }}</td>
+            <td>{{ match.withdrawal_split.description }}</td>
+            <td>{{ match.withdrawal_split.currency_symbol }}{{ "%.2f"|format(match.amount) }}</td>
+            <td>{{ match.deposit_split.date.strftime('%Y-%m-%d') }}</td>
+            <td>{{ match.deposit_split.destination_name }}</td>
+            <td>{{ match.deposit_split.description }}</td>
+            <td>{{ match.days_apart }}</td>
+            <td>
+                <button
+                    hx-post="/merge/{{ match.deposit.id }}/{{ match.withdrawal.id }}"
+                    hx-target="#row-{{ match.deposit.id }}-{{ match.withdrawal.id }}"
+                    hx-swap="outerHTML"
+                    class="merge-btn">
+                    Merge
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="no-results">No matching transaction pairs found for the given criteria.</p>
+{% endif %}
