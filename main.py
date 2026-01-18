@@ -1,5 +1,6 @@
 """FastAPI application for Firefly III Transaction Merger."""
 
+import logging
 import os
 import secrets
 from datetime import date, timedelta
@@ -13,7 +14,17 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
 from matcher import find_matching_pairs, parse_date, prepare_merge_update
-from utils import handle_errors, log_exception
+from utils import DEBUG, handle_errors, log_exception
+
+# Configure logging for app modules
+_log_level = logging.DEBUG if DEBUG else logging.INFO
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+
+for _logger_name in ("firefly_client", "matcher", "utils", "urllib3.connectionpool"):
+    _logger = logging.getLogger(_logger_name)
+    _logger.setLevel(_log_level)
+    _logger.addHandler(_handler)
 
 app = FastAPI(title="Firefly Transaction Merger")
 secret_key = os.environ.get("SESSION_SECRET_KEY") or secrets.token_hex(32)
@@ -251,4 +262,5 @@ async def merge_bulk(request: Request, pairs: str = Form(...)):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    log_level = "debug" if DEBUG else "info"
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level=log_level)

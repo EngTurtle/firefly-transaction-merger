@@ -18,7 +18,7 @@
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
-            "args": ["main:app", "--reload", "--host", "127.0.0.1", "--port", "8000"],
+            "args": ["main:app", "--reload", "--host", "127.0.0.1", "--port", "8000", "--log-level", "debug"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}",

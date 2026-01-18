@@ -8,10 +8,11 @@ from typing import Callable
 
 DEBUG = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
 
-logging.basicConfig(
-    level=logging.DEBUG if DEBUG else logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+# Suppress noisy debug logs from dependencies
+# Must be done before uvicorn configures logging
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
+logging.getLogger("python_multipart.multipart").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
