@@ -1,5 +1,6 @@
 """FastAPI application for Firefly III Transaction Merger."""
 
+import logging
 import os
 import secrets
 from datetime import date, timedelta
@@ -13,7 +14,17 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
 from matcher import find_matching_pairs, parse_date, prepare_merge_update
-from utils import handle_errors, log_exception
+from utils import DEBUG, handle_errors, log_exception
+
+# Configure logging for app modules
+_log_level = logging.DEBUG if DEBUG else logging.INFO
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+
+for _logger_name in ("firefly_client", "matcher", "utils", "urllib3.connectionpool"):
+    _logger = logging.getLogger(_logger_name)
+    _logger.setLevel(_log_level)
+    _logger.addHandler(_handler)
 
 app = FastAPI(title="Firefly Transaction Merger")
 secret_key = os.environ.get("SESSION_SECRET_KEY") or secrets.token_hex(32)
@@ -157,16 +168,12 @@ async def search(
     )
 
 
-@app.post("/merge/{deposit_id}/{withdrawal_id}", response_class=HTMLResponse)
-@handle_errors(templates, "merge_result.html")
-async def merge(request: Request, deposit_id: str, withdrawal_id: str):
-    """Merge a deposit/withdrawal pair into a transfer."""
-    client = get_client_from_session(request)
-    if not client:
-        return templates.TemplateResponse(
-            "merge_result.html", {"request": request, "error": "Session expired"}
-        )
+def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
+    """Merge a deposit/withdrawal pair into a transfer.
 
+    Returns dict with source_name and destination_name on success.
+    Raises exception on failure.
+    """
     # Fetch both transactions
     deposit = firefly_client.get_transaction(client, deposit_id)
     withdrawal = firefly_client.get_transaction(client, withdrawal_id)
@@ -198,17 +205,62 @@ async def merge(request: Request, deposit_id: str, withdrawal_id: str):
     # Delete the later transaction
     firefly_client.delete_transaction(client, later_id)
 
+    return {
+        "source_name": withdrawal_split.get("source_name", "Unknown"),
+        "destination_name": deposit_split.get("destination_name", "Unknown"),
+    }
+
+
+@app.post("/merge/{deposit_id}/{withdrawal_id}", response_class=HTMLResponse)
+@handle_errors(templates, "merge_result.html")
+async def merge(request: Request, deposit_id: str, withdrawal_id: str):
+    """Merge a deposit/withdrawal pair into a transfer."""
+    client = get_client_from_session(request)
+    if not client:
+        return templates.TemplateResponse(
+            "merge_result.html", {"request": request, "error": "Session expired"}
+        )
+
+    result = merge_pair(client, deposit_id, withdrawal_id)
+
     return templates.TemplateResponse(
         "merge_result.html",
         {
             "request": request,
-            "source_name": withdrawal_split.get("source_name", "Unknown"),
-            "destination_name": deposit_split.get("destination_name", "Unknown"),
+            "source_name": result["source_name"],
+            "destination_name": result["destination_name"],
         },
+    )
+
+
+@app.post("/merge-bulk", response_class=HTMLResponse)
+@handle_errors(templates, "bulk_merge_result.html")
+async def merge_bulk(request: Request, pairs: str = Form(...)):
+    """Merge multiple deposit/withdrawal pairs."""
+    client = get_client_from_session(request)
+    if not client:
+        return templates.TemplateResponse(
+            "bulk_merge_result.html", {"request": request, "error": "Session expired"}
+        )
+
+    pair_list = [p.strip() for p in pairs.split(",") if p.strip()]
+    results = []
+
+    for pair in pair_list:
+        deposit_id, withdrawal_id = pair.split(":")
+        try:
+            merge_pair(client, deposit_id, withdrawal_id)
+            results.append({"pair": pair, "success": True})
+        except Exception as e:
+            results.append({"pair": pair, "success": False, "error": str(e)})
+
+    return templates.TemplateResponse(
+        "bulk_merge_result.html", {"request": request, "results": results}
     )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    log_level = "debug" if DEBUG else "info"
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level=log_level)

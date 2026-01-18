@@ -1,5 +1,6 @@
 """Wrapper around firefly_iii_client for simplified access."""
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -13,6 +14,8 @@ from firefly_iii_client import (
 )
 from firefly_iii_client.configuration import Configuration
 from firefly_iii_client.rest import ApiException
+
+logger = logging.getLogger(__name__)
 
 
 def create_client(url: str, token: str) -> firefly_iii_client.ApiClient:
@@ -54,6 +57,7 @@ def get_transactions(
     api = TransactionsApi(client)
     transactions = []
     page = 1
+    total_pages = None
     while True:
         response = api.list_transaction(
             type=tx_type,
@@ -61,11 +65,20 @@ def get_transactions(
             end=end_date.isoformat(),
             page=page,
         )
+        if total_pages is None:
+            total_pages = response.meta.pagination.total_pages
+            total_count = response.meta.pagination.total
+            logger.debug(
+                "Fetching %s transactions: %d total across %d pages",
+                tx_type,
+                total_count,
+                total_pages,
+            )
         for tx in response.data:
             transactions.append(tx.to_dict())
             if limit and len(transactions) >= limit:
                 return transactions
-        if response.meta.pagination.current_page >= response.meta.pagination.total_pages:
+        if response.meta.pagination.current_page >= total_pages:
             break
         page += 1
     return transactions
@@ -89,6 +102,8 @@ def update_transaction(
     split_update = TransactionSplitUpdate(**updates)
     update_data = TransactionUpdate(transactions=[split_update])
 
+    logger.debug("Update payload for transaction %s: %s", transaction_id, updates)
+    logger.info("Updating transaction %s", transaction_id)
     response = api.update_transaction(transaction_id, update_data)
     return response.data.to_dict()
 
@@ -96,4 +111,5 @@ def update_transaction(
 def delete_transaction(client: firefly_iii_client.ApiClient, transaction_id: str) -> None:
     """Delete a transaction."""
     api = TransactionsApi(client)
+    logger.info("Deleting transaction %s", transaction_id)
     api.delete_transaction(transaction_id)

@@ -2,9 +2,20 @@
 <div class="error">{{ error }}</div>
 {% elif matches %}
 <h3>Found {{ matches|length }} matching pair(s)</h3>
+
+<div class="bulk-actions">
+    <button id="merge-selected-btn"
+            class="merge-all-btn"
+            disabled>
+        <span class="htmx-indicator">Merging...</span>
+        <span class="default-text">Merge Selected (0)</span>
+    </button>
+</div>
+
 <table class="results-table">
     <thead>
         <tr>
+            <th><input type="checkbox" id="select-all"></th>
             <th colspan="3">Withdrawal</th>
             <th>Amount</th>
             <th colspan="3">Deposit</th>
@@ -12,6 +23,7 @@
             <th>Action</th>
         </tr>
         <tr>
+            <th></th>
             <th>Date</th>
             <th>From Account</th>
             <th>Description</th>
@@ -26,6 +38,11 @@
     <tbody>
         {% for match in matches %}
         <tr id="row-{{ match.deposit.id }}-{{ match.withdrawal.id }}">
+            <td>
+                <input type="checkbox"
+                       class="merge-checkbox"
+                       value="{{ match.deposit.id }}:{{ match.withdrawal.id }}">
+            </td>
             <td>{{ match.withdrawal_split.date.strftime('%Y-%m-%d') }}</td>
             <td>{{ match.withdrawal_split.source_name }}</td>
             <td>{{ match.withdrawal_split.description }}</td>
@@ -39,14 +56,55 @@
                     hx-post="/merge/{{ match.deposit.id }}/{{ match.withdrawal.id }}"
                     hx-target="#row-{{ match.deposit.id }}-{{ match.withdrawal.id }}"
                     hx-swap="outerHTML"
+                    hx-disabled-elt="this"
                     class="merge-btn">
-                    Merge
+                    <span class="htmx-indicator">...</span>
+                    <span class="default-text">Merge</span>
                 </button>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+
+<script>
+(function() {
+    const selectAll = document.getElementById('select-all');
+    const mergeBtn = document.getElementById('merge-selected-btn');
+
+    function updateMergeButton() {
+        const checked = document.querySelectorAll('.merge-checkbox:checked');
+        mergeBtn.disabled = checked.length === 0;
+        mergeBtn.querySelector('.default-text').textContent = `Merge Selected (${checked.length})`;
+    }
+
+    selectAll.addEventListener('change', function() {
+        document.querySelectorAll('.merge-checkbox').forEach(cb => {
+            cb.checked = this.checked;
+        });
+        updateMergeButton();
+    });
+
+    document.querySelectorAll('.merge-checkbox').forEach(cb => {
+        cb.addEventListener('change', updateMergeButton);
+    });
+
+    mergeBtn.addEventListener('click', function() {
+        const pairs = Array.from(document.querySelectorAll('.merge-checkbox:checked'))
+            .map(cb => cb.value)
+            .join(',');
+
+        mergeBtn.classList.add('htmx-request');
+        mergeBtn.disabled = true;
+
+        htmx.ajax('POST', '/merge-bulk', {
+            target: '#results',
+            swap: 'innerHTML',
+            values: { pairs: pairs }
+        });
+    });
+})();
+</script>
 {% else %}
 <p class="no-results">No matching transaction pairs found for the given criteria.</p>
 {% endif %}

@@ -1,0 +1,31 @@
+{% if error %}
+<div class="error">{{ error }}</div>
+{% else %}
+<div class="bulk-merge-results">
+    <h3>Merge Results</h3>
+    {% set success_count = results|selectattr('success')|list|length %}
+    {% set fail_count = results|rejectattr('success')|list|length %}
+
+    <p class="summary">
+        <span class="success-count">{{ success_count }} merged successfully</span>
+        {% if fail_count > 0 %}
+        <span class="fail-count">{{ fail_count }} failed</span>
+        {% endif %}
+    </p>
+
+    {% if fail_count > 0 %}
+    <div class="error-details">
+        <h4>Failed merges:</h4>
+        <ul>
+        {% for r in results if not r.success %}
+            <li>{{ r.pair }}: {{ r.error }}</li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <button onclick="document.querySelector('.search-form button').click()">
+        Search Again
+    </button>
+</div>
+{% endif %}
