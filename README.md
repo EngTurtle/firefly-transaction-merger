@@ -19,23 +19,29 @@ This tool finds these matching pairs and merges them into a single transfer tran
 - Bulk merge multiple selected pairs at once
 - Session-based authentication with Firefly III Personal Access Token
 
-## Requirements
+## Quick Start
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager
-- Firefly III instance with API access
-
-## Setup
+### Using Docker Compose (Recommended)
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run the server
-uv run uvicorn main:app --reload
+docker compose up -d
 ```
 
 Open <http://localhost:8000>
+
+### Using Docker
+
+```bash
+docker run -p 8000:8000 --read-only --user 65534:65534 \
+  ghcr.io/engturtle/firefly-transaction-merger:latest
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SESSION_SECRET_KEY` | Secret key for session encryption. Set this for persistent sessions across restarts. | Random (generated at startup) |
+| `DEBUG` | Enable debug logging (`1`, `true`, or `yes`) | Disabled |
 
 ## Usage
 
@@ -50,3 +56,26 @@ Open <http://localhost:8000>
 2. Navigate to Options > Profile > OAuth
 3. Create a new Personal Access Token
 4. Copy the token (it's only shown once)
+
+## Development
+
+### Requirements
+
+- Python 3.14+
+- [uv](https://docs.astral.sh/uv/) package manager
+
+### Setup
+
+```bash
+# Install dependencies
+uv sync
+
+# Run the development server
+uv run uvicorn main:app --reload
+```
+
+### Building the Docker Image
+
+```bash
+docker build -t firefly-transaction-merger .
+```

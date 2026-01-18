@@ -1,0 +1,11 @@
+services:
+  app:
+    image: ghcr.io/engturtle/firefly-transaction-merger:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-}
+      # - DEBUG=1
+    read_only: true
+    user: "33:33"
+    restart: unless-stopped
