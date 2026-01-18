@@ -2,6 +2,8 @@
 
 A web tool for finding and merging duplicate withdrawal/deposit pairs in [Firefly III](https://firefly-iii.org/) that represent the same transfer between accounts.
 
+<img width="451" height="485.5" alt="image" src="https://github.com/user-attachments/assets/02de07d5-0357-484f-bd2d-b17d439e3e45" />
+
 ## Problem
 
 When importing transactions from multiple bank accounts, the same transfer often appears twice:
