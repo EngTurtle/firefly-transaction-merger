@@ -157,16 +157,12 @@ async def search(
     )
 
 
-@app.post("/merge/{deposit_id}/{withdrawal_id}", response_class=HTMLResponse)
-@handle_errors(templates, "merge_result.html")
-async def merge(request: Request, deposit_id: str, withdrawal_id: str):
-    """Merge a deposit/withdrawal pair into a transfer."""
-    client = get_client_from_session(request)
-    if not client:
-        return templates.TemplateResponse(
-            "merge_result.html", {"request": request, "error": "Session expired"}
-        )
+def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
+    """Merge a deposit/withdrawal pair into a transfer.
 
+    Returns dict with source_name and destination_name on success.
+    Raises exception on failure.
+    """
     # Fetch both transactions
     deposit = firefly_client.get_transaction(client, deposit_id)
     withdrawal = firefly_client.get_transaction(client, withdrawal_id)
@@ -198,13 +194,57 @@ async def merge(request: Request, deposit_id: str, withdrawal_id: str):
     # Delete the later transaction
     firefly_client.delete_transaction(client, later_id)
 
+    return {
+        "source_name": withdrawal_split.get("source_name", "Unknown"),
+        "destination_name": deposit_split.get("destination_name", "Unknown"),
+    }
+
+
+@app.post("/merge/{deposit_id}/{withdrawal_id}", response_class=HTMLResponse)
+@handle_errors(templates, "merge_result.html")
+async def merge(request: Request, deposit_id: str, withdrawal_id: str):
+    """Merge a deposit/withdrawal pair into a transfer."""
+    client = get_client_from_session(request)
+    if not client:
+        return templates.TemplateResponse(
+            "merge_result.html", {"request": request, "error": "Session expired"}
+        )
+
+    result = merge_pair(client, deposit_id, withdrawal_id)
+
     return templates.TemplateResponse(
         "merge_result.html",
         {
             "request": request,
-            "source_name": withdrawal_split.get("source_name", "Unknown"),
-            "destination_name": deposit_split.get("destination_name", "Unknown"),
+            "source_name": result["source_name"],
+            "destination_name": result["destination_name"],
         },
+    )
+
+
+@app.post("/merge-bulk", response_class=HTMLResponse)
+@handle_errors(templates, "bulk_merge_result.html")
+async def merge_bulk(request: Request, pairs: str = Form(...)):
+    """Merge multiple deposit/withdrawal pairs."""
+    client = get_client_from_session(request)
+    if not client:
+        return templates.TemplateResponse(
+            "bulk_merge_result.html", {"request": request, "error": "Session expired"}
+        )
+
+    pair_list = [p.strip() for p in pairs.split(",") if p.strip()]
+    results = []
+
+    for pair in pair_list:
+        deposit_id, withdrawal_id = pair.split(":")
+        try:
+            merge_pair(client, deposit_id, withdrawal_id)
+            results.append({"pair": pair, "success": True})
+        except Exception as e:
+            results.append({"pair": pair, "success": False, "error": str(e)})
+
+    return templates.TemplateResponse(
+        "bulk_merge_result.html", {"request": request, "results": results}
     )
 
 
