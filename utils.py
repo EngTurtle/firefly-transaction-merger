@@ -4,6 +4,8 @@ import functools
 import logging
 import os
 import traceback
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Callable
 
 DEBUG = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
@@ -14,6 +16,15 @@ logging.getLogger("python_multipart").setLevel(logging.WARNING)
 logging.getLogger("python_multipart.multipart").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return str(obj)
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 def log_exception(e: Exception, context: str = "") -> None:

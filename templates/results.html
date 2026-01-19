@@ -37,24 +37,50 @@
     </thead>
     <tbody>
         {% for match in matches %}
-        <tr id="row-{{ match.deposit.id }}-{{ match.withdrawal.id }}">
+        <tr id="row-{{ match.deposit.id }}-{{ match.primary_match.withdrawal.id }}"
+            data-deposit-id="{{ match.deposit.id }}"
+            {% if match.alternatives %}
+            class="has-alternatives"
+            data-alternatives='{{ match.alternatives_json }}'
+            {% endif %}>
             <td>
                 <input type="checkbox"
                        class="merge-checkbox"
-                       value="{{ match.deposit.id }}:{{ match.withdrawal.id }}">
+                       value="{{ match.deposit.id }}:{{ match.primary_match.withdrawal.id }}">
             </td>
-            <td>{{ match.withdrawal_split.date.strftime('%Y-%m-%d') }}</td>
-            <td>{{ match.withdrawal_split.source_name }}</td>
-            <td>{{ match.withdrawal_split.description }}</td>
-            <td>{{ match.withdrawal_split.currency_symbol }}{{ "%.2f"|format(match.amount) }}</td>
+            <td class="withdrawal-cell{% if match.alternatives %} has-alts{% endif %}"
+                {% if match.alternatives %}
+                onclick="toggleAlternatives('{{ match.deposit.id }}')"
+                title="Click to view {{ match.alternatives|length }} other match{{ 'es' if match.alternatives|length > 1 else '' }}"
+                {% endif %}>
+                <span class="withdrawal-date">{{ match.primary_match.withdrawal_split.date.strftime('%Y-%m-%d') }}</span>
+                {% if match.alternatives %}
+                <span class="alt-indicator">⚠️ +{{ match.alternatives|length }}</span>
+                {% endif %}
+            </td>
+            <td class="withdrawal-cell{% if match.alternatives %} has-alts{% endif %}"
+                {% if match.alternatives %}
+                onclick="toggleAlternatives('{{ match.deposit.id }}')"
+                title="Click to view {{ match.alternatives|length }} other match{{ 'es' if match.alternatives|length > 1 else '' }}"
+                {% endif %}>
+                {{ match.primary_match.withdrawal_split.source_name }}
+            </td>
+            <td class="withdrawal-cell{% if match.alternatives %} has-alts{% endif %}"
+                {% if match.alternatives %}
+                onclick="toggleAlternatives('{{ match.deposit.id }}')"
+                title="Click to view {{ match.alternatives|length }} other match{{ 'es' if match.alternatives|length > 1 else '' }}"
+                {% endif %}>
+                {{ match.primary_match.withdrawal_split.description }}
+            </td>
+            <td>{{ match.primary_match.withdrawal_split.currency_symbol }}{{ "%.2f"|format(match.amount) }}</td>
             <td>{{ match.deposit_split.date.strftime('%Y-%m-%d') }}</td>
             <td>{{ match.deposit_split.destination_name }}</td>
             <td>{{ match.deposit_split.description }}</td>
-            <td>{{ match.days_apart }}</td>
+            <td>{{ match.primary_match.days_apart }}</td>
             <td>
                 <button
-                    hx-post="/merge/{{ match.deposit.id }}/{{ match.withdrawal.id }}"
-                    hx-target="#row-{{ match.deposit.id }}-{{ match.withdrawal.id }}"
+                    hx-post="/merge/{{ match.deposit.id }}/{{ match.primary_match.withdrawal.id }}"
+                    hx-target="#row-{{ match.deposit.id }}-{{ match.primary_match.withdrawal.id }}"
                     hx-swap="outerHTML"
                     hx-disabled-elt="this"
                     class="merge-btn">
@@ -63,6 +89,32 @@
                 </button>
             </td>
         </tr>
+        {% if match.alternatives %}
+        <tr id="alt-row-{{ match.deposit.id }}" class="alternatives-row" style="display:none;">
+            <td colspan="10">
+                <div class="alternatives-container">
+                    <h4>Alternative Matches</h4>
+                    <table class="alternatives-table">
+                        <thead>
+                            <tr>
+                                <th>Withdrawal Date</th>
+                                <th>From Account</th>
+                                <th>Description</th>
+                                <th>Days Apart</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="alt-body-{{ match.deposit.id }}">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                    <button class="hide-alternatives-btn" onclick="toggleAlternatives('{{ match.deposit.id }}')">
+                        Hide Alternatives
+                    </button>
+                </div>
+            </td>
+        </tr>
+        {% endif %}
         {% endfor %}
     </tbody>
 </table>
@@ -104,6 +156,123 @@
         });
     });
 })();
+
+// Alternative matches functions
+function toggleAlternatives(depositId) {
+    const mainRow = document.querySelector(`tr[data-deposit-id="${depositId}"]`);
+    const altRow = document.getElementById(`alt-row-${depositId}`);
+
+    if (altRow.style.display === 'none') {
+        // Show alternatives - populate table from data attribute
+        const alternatives = JSON.parse(mainRow.dataset.alternatives);
+        const tbody = document.getElementById(`alt-body-${depositId}`);
+
+        tbody.innerHTML = alternatives.map(alt => `
+            <tr>
+                <td>${formatDate(alt.withdrawal_split.date)}</td>
+                <td>${escapeHtml(alt.withdrawal_split.source_name)}</td>
+                <td>${escapeHtml(alt.withdrawal_split.description)}</td>
+                <td>${alt.days_apart}</td>
+                <td>
+                    <button class="merge-btn alt-merge-btn"
+                            onclick="selectAlternative('${depositId}', '${alt.withdrawal.id}')">
+                        Select This
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        altRow.style.display = 'table-row';
+    } else {
+        // Hide alternatives
+        altRow.style.display = 'none';
+    }
+}
+
+function selectAlternative(depositId, withdrawalId) {
+    const mainRow = document.querySelector(`tr[data-deposit-id="${depositId}"]`);
+    const cells = mainRow.querySelectorAll('td');
+
+    // Get current alternatives list
+    const alternatives = JSON.parse(mainRow.dataset.alternatives);
+
+    // Find the selected alternative in the list and get its full data
+    const selectedAltIndex = alternatives.findIndex(alt => alt.withdrawal.id === withdrawalId);
+    const selectedAlt = alternatives[selectedAltIndex];
+
+    // Get current primary withdrawal data from the row
+    const currentPrimaryDate = cells[1].querySelector('.withdrawal-date').textContent;
+    const currentPrimarySourceName = cells[2].textContent;
+    const currentPrimaryDescription = cells[3].textContent;
+    const currentPrimaryDaysApart = parseInt(cells[8].textContent);
+
+    // Extract current primary withdrawal ID from row ID
+    const currentRowId = mainRow.id;
+    const currentPrimaryWithdrawalId = currentRowId.split('-')[2];
+
+    // Create entry for the current primary (to move to alternatives)
+    const previousPrimary = {
+        withdrawal: { id: currentPrimaryWithdrawalId },
+        withdrawal_split: {
+            date: currentPrimaryDate,
+            source_name: currentPrimarySourceName,
+            description: currentPrimaryDescription
+        },
+        days_apart: currentPrimaryDaysApart
+    };
+
+    // Update alternatives: remove selected, add previous primary
+    const newAlternatives = alternatives.filter((_, idx) => idx !== selectedAltIndex);
+    newAlternatives.push(previousPrimary);
+
+    // Sort by days_apart
+    newAlternatives.sort((a, b) => a.days_apart - b.days_apart);
+
+    // Update the data-alternatives attribute
+    mainRow.dataset.alternatives = JSON.stringify(newAlternatives);
+
+    // Update row ID for correct HTMX targeting
+    mainRow.id = `row-${depositId}-${withdrawalId}`;
+
+    // Update withdrawal date cell (has nested spans)
+    cells[1].innerHTML = `<span class="withdrawal-date">${formatDate(selectedAlt.withdrawal_split.date)}</span> <span class="alt-indicator">⚠️ +${newAlternatives.length}</span>`;
+
+    // Update from account and description
+    cells[2].textContent = selectedAlt.withdrawal_split.source_name;
+    cells[3].textContent = selectedAlt.withdrawal_split.description;
+
+    // Update days apart
+    cells[8].textContent = selectedAlt.days_apart;
+
+    // Update checkbox value
+    const checkbox = cells[0].querySelector('.merge-checkbox');
+    checkbox.value = `${depositId}:${withdrawalId}`;
+
+    // Update merge button's hx-post URL
+    const mergeBtn = mainRow.querySelector('.merge-btn');
+    mergeBtn.setAttribute('hx-post', `/merge/${depositId}/${withdrawalId}`);
+    mergeBtn.setAttribute('hx-target', `#row-${depositId}-${withdrawalId}`);
+
+    // Re-initialize HTMX for the updated button
+    htmx.process(mergeBtn);
+
+    // Hide alternatives
+    toggleAlternatives(depositId);
+}
+
+function formatDate(dateStr) {
+    // Handle ISO datetime string from API or already formatted date
+    if (typeof dateStr === 'string' && dateStr.includes('T')) {
+        return dateStr.split('T')[0];
+    }
+    return dateStr;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
 </script>
 {% else %}
 <p class="no-results">No matching transaction pairs found for the given criteria.</p>
