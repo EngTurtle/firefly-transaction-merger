@@ -1,5 +1,6 @@
 """FastAPI application for Firefly III Transaction Merger."""
 
+import json
 import logging
 import os
 import secrets
@@ -14,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
 from matcher import find_matching_pairs, parse_date, prepare_merge_update
-from utils import DEBUG, handle_errors, log_exception
+from utils import DEBUG, handle_errors, json_serial, log_exception
 
 # Configure logging for app modules
 _log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -162,6 +163,19 @@ async def search(
 
     # Find matches
     matches = find_matching_pairs(deposits, withdrawals, business_days)
+
+    # Pre-serialize alternatives to JSON strings for template
+    for match in matches:
+        # Convert WithdrawalMatch objects to dicts and serialize with custom handler
+        alternatives_dicts = [
+            {
+                "withdrawal": alt.withdrawal,
+                "withdrawal_split": alt.withdrawal_split,
+                "days_apart": alt.days_apart,
+            }
+            for alt in match.alternatives
+        ]
+        match.alternatives_json = json.dumps(alternatives_dicts, default=json_serial)
 
     return templates.TemplateResponse(
         "results.html", {"request": request, "matches": matches}

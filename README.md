@@ -81,3 +81,10 @@ uv run uvicorn main:app --reload
 ```bash
 docker build -t firefly-transaction-merger .
 ```
+
+## Acknowledgements
+
+This project was built with the help of:
+
+- [**firefly-iii-client**](https://github.com/ms32035/firefly-iii-client)
+- [**Claude Code**](https://claude.com/claude-code)

@@ -18,6 +18,42 @@ class MatchedPair:
     days_apart: int
 
 
+@dataclass
+class WithdrawalMatch:
+    """A single withdrawal that matches a deposit."""
+
+    withdrawal: dict[str, Any]
+    withdrawal_split: dict[str, Any]
+    days_apart: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dictionary."""
+        # Create a copy of the splits to avoid modifying the original
+        withdrawal_split_copy = self.withdrawal_split.copy()
+
+        # Convert datetime to string
+        if "date" in withdrawal_split_copy:
+            date_obj = withdrawal_split_copy["date"]
+            withdrawal_split_copy["date"] = date_obj.strftime("%Y-%m-%d") if hasattr(date_obj, "strftime") else str(date_obj)
+
+        return {
+            "withdrawal": self.withdrawal,
+            "withdrawal_split": withdrawal_split_copy,
+            "days_apart": self.days_apart,
+        }
+
+
+@dataclass
+class MatchedPairWithAlternatives:
+    """A deposit with one or more matching withdrawals."""
+
+    deposit: dict[str, Any]
+    deposit_split: dict[str, Any]
+    primary_match: WithdrawalMatch
+    alternatives: list[WithdrawalMatch]
+    amount: Decimal
+
+
 def parse_date(date_value: datetime) -> date:
     """Extract date from datetime returned by Firefly III API client."""
     return date_value.date()
@@ -47,14 +83,17 @@ def find_matching_pairs(
     deposits: list[dict[str, Any]],
     withdrawals: list[dict[str, Any]],
     max_business_days: int,
-) -> list[MatchedPair]:
-    """Find matching deposit/withdrawal pairs.
+) -> list[MatchedPairWithAlternatives]:
+    """Find matching deposit/withdrawal pairs with alternatives.
 
     A match is defined as:
     - Same currency
     - Same amount (exact match)
     - Different asset accounts (deposit destination != withdrawal source)
     - Within the specified number of business days
+
+    Returns deposits matched with their closest withdrawal (by date),
+    plus any alternative matches sorted by date proximity.
     """
     matches = []
     used_withdrawal_ids = set()
@@ -68,6 +107,9 @@ def find_matching_pairs(
         deposit_date = parse_date(deposit_split.get("date", ""))
         deposit_dest_id = deposit_split.get("destination_id")
         deposit_currency = deposit_split.get("currency_id")
+
+        # Collect ALL matching withdrawals for this deposit
+        withdrawal_matches = []
 
         for withdrawal in withdrawals:
             if withdrawal["id"] in used_withdrawal_ids:
@@ -100,19 +142,37 @@ def find_matching_pairs(
             if days_apart > max_business_days:
                 continue
 
-            # Found a match
-            matches.append(
-                MatchedPair(
-                    deposit=deposit,
+            # Found a match - add to list
+            withdrawal_matches.append(
+                WithdrawalMatch(
                     withdrawal=withdrawal,
-                    deposit_split=deposit_split,
                     withdrawal_split=withdrawal_split,
-                    amount=deposit_amount,
                     days_apart=days_apart,
                 )
             )
-            used_withdrawal_ids.add(withdrawal["id"])
-            break  # Move to next deposit
+
+        # If we found any matches, sort by closest date
+        if withdrawal_matches:
+            # Sort by days_apart (ascending - closest first)
+            withdrawal_matches.sort(key=lambda m: m.days_apart)
+
+            # First match is primary, rest are alternatives
+            primary_match = withdrawal_matches[0]
+            alternatives = withdrawal_matches[1:]
+
+            # Mark primary match as used
+            used_withdrawal_ids.add(primary_match.withdrawal["id"])
+
+            # Create matched pair with alternatives
+            matches.append(
+                MatchedPairWithAlternatives(
+                    deposit=deposit,
+                    deposit_split=deposit_split,
+                    primary_match=primary_match,
+                    alternatives=alternatives,
+                    amount=deposit_amount,
+                )
+            )
 
     return matches
 

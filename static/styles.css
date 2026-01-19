@@ -299,6 +299,98 @@ h3 {
     cursor: pointer;
 }
 
+/* Alternative matches styles */
+.has-alternatives {
+    position: relative;
+}
+
+.withdrawal-cell.has-alts {
+    cursor: pointer;
+    background: #fff9e6;
+    transition: background 0.2s;
+}
+
+.withdrawal-cell.has-alts:hover {
+    background: #fff3cc;
+}
+
+.alt-indicator {
+    background: #f39c12;
+    color: white;
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    border-radius: 3px;
+    margin-left: 6px;
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.withdrawal-date {
+    display: inline-block;
+}
+
+.alternatives-row {
+    background: #f9f9f9;
+}
+
+.alternatives-container {
+    padding: 15px;
+    background: #fafafa;
+    border-left: 3px solid #f39c12;
+    margin: 5px 0;
+}
+
+.alternatives-container h4 {
+    margin-bottom: 10px;
+    color: #f39c12;
+    font-size: 0.9rem;
+}
+
+.alternatives-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    background: white;
+    margin-bottom: 10px;
+}
+
+.alternatives-table th,
+.alternatives-table td {
+    padding: 8px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.alternatives-table th {
+    background: #f5f5f5;
+    font-weight: 500;
+    font-size: 0.8rem;
+}
+
+.alternatives-table tbody tr:hover {
+    background: #f9f9f9;
+}
+
+.hide-alternatives-btn {
+    background: #95a5a6;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
+.hide-alternatives-btn:hover {
+    background: #7f8c8d;
+}
+
+.alt-merge-btn {
+    background: #3498db;
+    padding: 4px 10px;
+    font-size: 0.8rem;
+}
+
+.alt-merge-btn:hover:not(:disabled) {
+    background: #2980b9;
+}
+
 @media (max-width: 768px) {
     .form-row {
         flex-direction: column;
