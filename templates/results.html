@@ -141,19 +141,119 @@
         cb.addEventListener('change', updateMergeButton);
     });
 
-    mergeBtn.addEventListener('click', function() {
-        const pairs = Array.from(document.querySelectorAll('.merge-checkbox:checked'))
-            .map(cb => cb.value)
-            .join(',');
+    // Bulk merge state management
+    let isMerging = false;
+    let shouldStop = false;
+    let currentMergeIndex = 0;
 
-        mergeBtn.classList.add('htmx-request');
+    mergeBtn.addEventListener('click', async function() {
+        const checkedBoxes = Array.from(document.querySelectorAll('.merge-checkbox:checked'));
+
+        if (isMerging) {
+            // Stop button clicked
+            shouldStop = true;
+            mergeBtn.disabled = true;
+            mergeBtn.querySelector('.default-text').textContent = 'Stopping...';
+            return;
+        }
+
+        if (checkedBoxes.length === 0) return;
+
+        // Start merging
+        isMerging = true;
+        shouldStop = false;
+        currentMergeIndex = 0;
+
+        // Change button to "Stop"
+        mergeBtn.querySelector('.default-text').textContent = 'Stop Merge';
+        mergeBtn.disabled = false;
+
+        // Disable select-all and individual checkboxes
+        selectAll.disabled = true;
+        document.querySelectorAll('.merge-checkbox').forEach(cb => cb.disabled = true);
+
+        // Process each pair sequentially
+        for (let i = 0; i < checkedBoxes.length; i++) {
+            if (shouldStop) {
+                break;
+            }
+
+            currentMergeIndex = i;
+            const checkbox = checkedBoxes[i];
+            const [depositId, withdrawalId] = checkbox.value.split(':');
+            const row = document.getElementById(`row-${depositId}-${withdrawalId}`);
+
+            // Mark row as processing
+            row.classList.add('processing');
+
+            try {
+                // Call single merge endpoint
+                await new Promise((resolve, reject) => {
+                    const rowId = `row-${depositId}-${withdrawalId}`;
+
+                    // HTMX doesn't return a proper promise, so we listen for events
+                    const successHandler = function(evt) {
+                        // Check if this event is for our specific row
+                        if (evt.detail.target) {
+                            const targetId = evt.detail.target.id;
+                            // Also check if we're swapping a row that matches our pattern
+                            if (targetId === rowId || evt.detail.pathInfo.requestPath.includes(`/merge/${depositId}/${withdrawalId}`)) {
+                                document.body.removeEventListener('htmx:afterSwap', successHandler);
+                                document.body.removeEventListener('htmx:responseError', errorHandler);
+                                resolve();
+                            }
+                        }
+                    };
+
+                    // Handle errors
+                    const errorHandler = function(evt) {
+                        if (evt.detail.pathInfo && evt.detail.pathInfo.requestPath.includes(`/merge/${depositId}/${withdrawalId}`)) {
+                            document.body.removeEventListener('htmx:afterSwap', successHandler);
+                            document.body.removeEventListener('htmx:responseError', errorHandler);
+                            // Still resolve - we'll show the error in the UI
+                            resolve();
+                        }
+                    };
+
+                    document.body.addEventListener('htmx:afterSwap', successHandler);
+                    document.body.addEventListener('htmx:responseError', errorHandler);
+
+                    // Trigger the HTMX request
+                    htmx.ajax('POST', `/merge/${depositId}/${withdrawalId}`, {
+                        target: `#${rowId}`,
+                        swap: 'outerHTML'
+                    });
+                });
+
+                // Small delay to ensure UI updates
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+            } catch (error) {
+                console.error(`Failed to merge ${depositId}:${withdrawalId}`, error);
+                // Continue with next pair even if this one failed
+            }
+
+            // Update button text to show progress
+            if (!shouldStop) {
+                mergeBtn.querySelector('.default-text').textContent =
+                    `Stop Merge (${i + 1}/${checkedBoxes.length})`;
+            }
+        }
+
+        // Reset state
+        isMerging = false;
+        shouldStop = false;
         mergeBtn.disabled = true;
 
-        htmx.ajax('POST', '/merge-bulk', {
-            target: '#results',
-            swap: 'innerHTML',
-            values: { pairs: pairs }
-        });
+        // Re-enable checkboxes that weren't merged
+        selectAll.disabled = false;
+        document.querySelectorAll('.merge-checkbox').forEach(cb => cb.disabled = false);
+
+        // Update button text
+        const remainingChecked = document.querySelectorAll('.merge-checkbox:checked').length;
+        mergeBtn.querySelector('.default-text').textContent =
+            remainingChecked > 0 ? `Merge Selected (${remainingChecked})` : 'Merge Selected (0)';
+        mergeBtn.disabled = remainingChecked === 0;
     });
 })();
 
