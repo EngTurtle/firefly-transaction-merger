@@ -3,7 +3,7 @@
 # =============================================================================
 # Builder stage - install dependencies with uv
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # =============================================================================
 # Final stage - minimal runtime image
 # =============================================================================
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:3.13-slim-bookworm AS runtime
 
 WORKDIR /app
 
