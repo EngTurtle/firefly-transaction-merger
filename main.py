@@ -247,32 +247,6 @@ async def merge(request: Request, deposit_id: str, withdrawal_id: str):
     )
 
 
-@app.post("/merge-bulk", response_class=HTMLResponse)
-@handle_errors(templates, "bulk_merge_result.html")
-async def merge_bulk(request: Request, pairs: str = Form(...)):
-    """Merge multiple deposit/withdrawal pairs."""
-    client = get_client_from_session(request)
-    if not client:
-        return templates.TemplateResponse(
-            "bulk_merge_result.html", {"request": request, "error": "Session expired"}
-        )
-
-    pair_list = [p.strip() for p in pairs.split(",") if p.strip()]
-    results = []
-
-    for pair in pair_list:
-        deposit_id, withdrawal_id = pair.split(":")
-        try:
-            merge_pair(client, deposit_id, withdrawal_id)
-            results.append({"pair": pair, "success": True})
-        except Exception as e:
-            results.append({"pair": pair, "success": False, "error": str(e)})
-
-    return templates.TemplateResponse(
-        "bulk_merge_result.html", {"request": request, "results": results}
-    )
-
-
 if __name__ == "__main__":
     import uvicorn
 
