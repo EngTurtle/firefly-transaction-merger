@@ -276,6 +276,18 @@ async def process_merge_job(job_id: str) -> None:
         if DEBUG:
             log_exception(e, f"process_merge_job {job_id}")
 
+    except ApiException as e:
+        # API error occurred outside of update/delete (e.g., transaction not found, connection error)
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        job.error_type = "other"
+        # Extract the API error message from the body if available
+        job.api_error_message = str(e)
+        job.completed_at = time.time()
+        logger.error(f"Job {job_id} failed: {e}")
+        if DEBUG:
+            log_exception(e, f"process_merge_job {job_id}")
+
 
 async def cleanup_old_jobs() -> None:
     """Periodically remove completed/failed jobs older than 1 hour.
