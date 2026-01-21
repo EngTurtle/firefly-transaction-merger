@@ -247,6 +247,24 @@ h3 {
     margin: 0;
 }
 
+.merge-critical-error {
+    background: #ffcccc;
+    border: 2px solid #cc0000;
+}
+
+.merge-critical-error td {
+    background: #ffcccc;
+    font-weight: bold;
+}
+
+.merge-critical-error .error {
+    display: inline;
+    color: #cc0000;
+    background: none;
+    padding: 0;
+    margin: 0;
+}
+
 .search-form button.htmx-request {
     background: #85c1e9;
 }

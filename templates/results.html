@@ -314,12 +314,47 @@ function checkForDuplicateTransactions() {
                         completed++;
                         jobComplete = true;
                     } else if (status.status === 'failed') {
-                        row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                            <span class="error">Merge failed: ${status.error}</span>
+                        // Determine error severity and message based on error_type
+                        let errorClass = 'merge-error';
+                        let errorMessage = status.error || 'Unknown error occurred';
+                        let shouldStopAll = false;
+
+                        if (status.error_type === 'delete_failed_after_update') {
+                            errorClass = 'merge-critical-error';
+                            errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
+                            shouldStopAll = true; // Always stop on critical errors
+                        } else if (status.error_type === 'update_failed') {
+                            errorMessage = 'Update failed: ' + errorMessage;
+                        }
+
+                        row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
+                            <span class="error">${errorMessage}</span>
                             <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                         </td></tr>`;
                         completed++;
                         jobComplete = true;
+
+                        // Ask user if they want to continue with remaining merges
+                        if (i < checkedBoxes.length - 1) {
+                            const remaining = checkedBoxes.length - i - 1;
+                            let continuePrompt;
+
+                            if (shouldStopAll) {
+                                alert(`CRITICAL ERROR: A merge partially completed (update succeeded but delete failed). Stopping all remaining merges for safety. Please check Firefly III for duplicate transactions that need manual cleanup.`);
+                                shouldStop = true;
+                                break;
+                            } else {
+                                const continueProcessing = confirm(
+                                    `Merge failed for this transaction pair.\n\n` +
+                                    `${remaining} pair(s) remaining.\n\n` +
+                                    `Do you want to continue merging the remaining pairs?`
+                                );
+                                if (!continueProcessing) {
+                                    shouldStop = true;
+                                    break;
+                                }
+                            }
+                        }
                     } else {
                         // Still pending or processing, wait and poll again
                         await new Promise(resolve => setTimeout(resolve, pollInterval));
@@ -399,8 +434,19 @@ function checkForDuplicateTransactions() {
                         </td></tr>`;
                         break;
                     } else if (status.status === 'failed') {
-                        row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                            <span class="error">Merge failed: ${status.error}</span>
+                        // Determine error severity based on error_type
+                        let errorClass = 'merge-error';
+                        let errorMessage = status.error || 'Unknown error occurred';
+
+                        if (status.error_type === 'delete_failed_after_update') {
+                            errorClass = 'merge-critical-error';
+                            errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
+                        } else if (status.error_type === 'update_failed') {
+                            errorMessage = 'Update failed: ' + errorMessage;
+                        }
+
+                        row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
+                            <span class="error">${errorMessage}</span>
                             <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                         </td></tr>`;
                         break;

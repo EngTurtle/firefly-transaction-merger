@@ -12,6 +12,18 @@ from matcher import parse_date, prepare_merge_update
 from utils import DEBUG, log_exception
 
 
+class MergeUpdateError(Exception):
+    """Exception raised when transaction update fails during merge."""
+
+    pass
+
+
+class MergeDeleteError(Exception):
+    """Exception raised when transaction delete fails after successful update."""
+
+    pass
+
+
 class JobStatus(str, Enum):
     """Status of a background merge job."""
 
@@ -32,6 +44,7 @@ class MergeJob:
     firefly_token: str
     status: JobStatus = JobStatus.PENDING
     error: Optional[str] = None
+    error_type: Optional[str] = None  # "update_failed", "delete_failed_after_update", "other"
     result: Optional[dict] = None
     created_at: float = 0.0
     completed_at: Optional[float] = None
@@ -83,8 +96,14 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
     update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
 
     # CRITICAL: Delete MUST only happen if update succeeds
-    # If update fails, exception propagates immediately without attempting delete
-    firefly_client.update_transaction(client, earlier_id, update_data)
+    # If update fails, wrap in custom exception and propagate
+    try:
+        firefly_client.update_transaction(client, earlier_id, update_data)
+    except Exception as e:
+        raise MergeUpdateError(
+            f"Failed to update transaction {earlier_id} to transfer. "
+            f"Original error: {type(e).__name__}: {str(e)}"
+        ) from e
 
     # Update succeeded - now safe to delete the later transaction
     try:
@@ -92,13 +111,16 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
     except Exception as e:
         # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
-        # Log the context and re-raise original exception
         logger = logging.getLogger(__name__)
         logger.error(
             f"CRITICAL: Updated transaction {earlier_id} to transfer, "
             f"but failed to delete {later_id}. Manual cleanup required."
         )
-        raise  # Re-raise original exception without modification
+        raise MergeDeleteError(
+            f"CRITICAL: Successfully updated transaction {earlier_id} to transfer, "
+            f"but failed to delete transaction {later_id}. Manual cleanup required. "
+            f"Original error: {type(e).__name__}: {str(e)}"
+        ) from e
 
     return {
         "source_name": withdrawal_split.get("source_name", "Unknown"),
@@ -163,10 +185,16 @@ async def merge_pair_async(
     update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
 
     # CRITICAL: Delete MUST only happen if update succeeds
-    # If update fails, exception propagates immediately without attempting delete
-    await asyncio.to_thread(
-        firefly_client.update_transaction, client, earlier_id, update_data
-    )
+    # If update fails, wrap in custom exception and propagate
+    try:
+        await asyncio.to_thread(
+            firefly_client.update_transaction, client, earlier_id, update_data
+        )
+    except Exception as e:
+        raise MergeUpdateError(
+            f"Failed to update transaction {earlier_id} to transfer. "
+            f"Original error: {type(e).__name__}: {str(e)}"
+        ) from e
 
     # Update succeeded - now safe to delete the later transaction
     try:
@@ -174,13 +202,16 @@ async def merge_pair_async(
     except Exception as e:
         # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
-        # Log the context and re-raise original exception
         logger = logging.getLogger(__name__)
         logger.error(
             f"CRITICAL: Updated transaction {earlier_id} to transfer, "
             f"but failed to delete {later_id}. Manual cleanup required."
         )
-        raise  # Re-raise original exception without modification
+        raise MergeDeleteError(
+            f"CRITICAL: Successfully updated transaction {earlier_id} to transfer, "
+            f"but failed to delete transaction {later_id}. Manual cleanup required. "
+            f"Original error: {type(e).__name__}: {str(e)}"
+        ) from e
 
     return {
         "source_name": withdrawal_split.get("source_name", "Unknown"),
@@ -219,12 +250,33 @@ async def process_merge_job(job_id: str) -> None:
         job.completed_at = time.time()
         logger.info(f"Job {job_id} completed successfully")
 
-    except Exception as e:
-        # Update job with failure
+    except MergeUpdateError as e:
+        # Update operation failed - no data corruption
         job.status = JobStatus.FAILED
         job.error = str(e)
+        job.error_type = "update_failed"
         job.completed_at = time.time()
-        logger.error(f"Job {job_id} failed: {e}")
+        logger.error(f"Job {job_id} failed during update: {e}")
+        if DEBUG:
+            log_exception(e, f"process_merge_job {job_id}")
+
+    except MergeDeleteError as e:
+        # Delete failed after successful update - CRITICAL
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        job.error_type = "delete_failed_after_update"
+        job.completed_at = time.time()
+        logger.error(f"Job {job_id} CRITICAL FAILURE - partial merge: {e}")
+        if DEBUG:
+            log_exception(e, f"process_merge_job {job_id}")
+
+    except Exception as e:
+        # Other unexpected error
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        job.error_type = "other"
+        job.completed_at = time.time()
+        logger.error(f"Job {job_id} failed with unexpected error: {e}")
         if DEBUG:
             log_exception(e, f"process_merge_job {job_id}")
 

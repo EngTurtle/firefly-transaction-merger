@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
+from firefly_iii_client.rest import ApiException
 from matcher import find_matching_pairs
 from merge_service import (
     MergeJob,
@@ -82,11 +83,19 @@ async def login(request: Request, url: str = Form(...), token: str = Form(...)):
         request.session["firefly_token"] = token
 
         return RedirectResponse(url="/search", status_code=302)
-    except Exception as e:
+    except ApiException as e:
+        # Firefly API error (invalid credentials, connection error, etc.)
         log_exception(e, "login")
         return templates.TemplateResponse(
             "login.html",
             {"request": request, "error": str(e), "url": url, "logged_in": False},
+        )
+    except (ValueError, KeyError, TypeError) as e:
+        # Invalid URL format or configuration issue
+        log_exception(e, "login")
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": f"Invalid configuration: {e}", "url": url, "logged_in": False},
         )
 
 
@@ -106,7 +115,10 @@ async def search_page(request: Request):
 
     try:
         accounts = firefly_client.get_asset_accounts(client)
-    except Exception:
+    except ApiException as e:
+        # Firefly API error - log but continue with empty account list
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to fetch accounts: {e}")
         accounts = []
 
     today = date.today()
@@ -245,6 +257,7 @@ async def get_job_status(job_id: str):
         "job_id": job.job_id,
         "status": job.status,
         "error": job.error,
+        "error_type": job.error_type,
         "result": job.result,
     }
 
