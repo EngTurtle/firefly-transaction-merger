@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Optional
 
 import firefly_client
+from firefly_iii_client.rest import ApiException
 from matcher import parse_date, prepare_merge_update
 from utils import DEBUG, log_exception
 
@@ -100,7 +101,7 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
     # If update fails, wrap in custom exception and propagate
     try:
         firefly_client.update_transaction(client, earlier_id, update_data)
-    except Exception as e:
+    except ApiException as e:
         raise MergeUpdateError(
             f"Failed to update transaction {earlier_id} to transfer. "
             f"Original error: {type(e).__name__}: {str(e)}"
@@ -109,7 +110,7 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
     # Update succeeded - now safe to delete the later transaction
     try:
         firefly_client.delete_transaction(client, later_id)
-    except Exception as e:
+    except ApiException as e:
         # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
         logger = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ async def merge_pair_async(
         await asyncio.to_thread(
             firefly_client.update_transaction, client, earlier_id, update_data
         )
-    except Exception as e:
+    except ApiException as e:
         raise MergeUpdateError(
             f"Failed to update transaction {earlier_id} to transfer. "
             f"Original error: {type(e).__name__}: {str(e)}"
@@ -200,7 +201,7 @@ async def merge_pair_async(
     # Update succeeded - now safe to delete the later transaction
     try:
         await asyncio.to_thread(firefly_client.delete_transaction, client, later_id)
-    except Exception as e:
+    except ApiException as e:
         # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
         logger = logging.getLogger(__name__)
@@ -272,18 +273,6 @@ async def process_merge_job(job_id: str) -> None:
         job.api_error_message = str(e.__cause__) if e.__cause__ else str(e)
         job.completed_at = time.time()
         logger.error(f"Job {job_id} CRITICAL FAILURE - partial merge: {e}")
-        if DEBUG:
-            log_exception(e, f"process_merge_job {job_id}")
-
-    except Exception as e:
-        # Other unexpected error
-        job.status = JobStatus.FAILED
-        job.error = str(e)
-        job.error_type = "other"
-        # For unexpected errors, use the error directly
-        job.api_error_message = str(e)
-        job.completed_at = time.time()
-        logger.error(f"Job {job_id} failed with unexpected error: {e}")
         if DEBUG:
             log_exception(e, f"process_merge_job {job_id}")
 
