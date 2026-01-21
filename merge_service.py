@@ -288,6 +288,18 @@ async def process_merge_job(job_id: str) -> None:
         if DEBUG:
             log_exception(e, f"process_merge_job {job_id}")
 
+    except Exception as e:
+        # Final safety net: catch ANY unexpected errors (bugs, programming errors, etc.)
+        # This ensures job status is always updated even for unforeseen exceptions
+        job.status = JobStatus.FAILED
+        job.error = f"Unexpected error: {type(e).__name__}: {str(e)}"
+        job.error_type = "other"
+        job.api_error_message = f"An unexpected error occurred: {str(e)}"
+        job.completed_at = time.time()
+        logger.error(f"Job {job_id} failed with unexpected error: {type(e).__name__}: {e}")
+        if DEBUG:
+            log_exception(e, f"process_merge_job {job_id}")
+
 
 async def cleanup_old_jobs() -> None:
     """Periodically remove completed/failed jobs older than 1 hour.
