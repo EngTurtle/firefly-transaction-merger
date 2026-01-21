@@ -317,14 +317,24 @@ function checkForDuplicateTransactions() {
                         // Determine error severity and message based on error_type
                         let errorClass = 'merge-error';
                         let errorMessage = status.error || 'Unknown error occurred';
-                        let shouldStopAll = false;
+                        let alertMessage = '';
 
                         if (status.error_type === 'delete_failed_after_update') {
                             errorClass = 'merge-critical-error';
                             errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
-                            shouldStopAll = true; // Always stop on critical errors
+                            alertMessage = 'CRITICAL ERROR: A merge partially completed (update succeeded but delete failed).\n\n' +
+                                         'A transaction was successfully converted to a transfer, but the duplicate transaction was NOT deleted.\n\n' +
+                                         'Stopping all remaining merges. Check Firefly III for duplicate transactions needing manual cleanup.';
                         } else if (status.error_type === 'update_failed') {
+                            errorClass = 'merge-error';
                             errorMessage = 'Update failed: ' + errorMessage;
+                            alertMessage = 'ERROR: Failed to update transaction to transfer.\n\n' +
+                                         'This could indicate API connection issues, permission problems, or invalid transaction state.\n\n' +
+                                         'Stopping all remaining merges to prevent cascading failures.';
+                        } else {
+                            errorClass = 'merge-error';
+                            alertMessage = 'ERROR: An unexpected error occurred during merge.\n\n' +
+                                         'Stopping all remaining merges for safety.';
                         }
 
                         row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
@@ -334,26 +344,12 @@ function checkForDuplicateTransactions() {
                         completed++;
                         jobComplete = true;
 
-                        // Ask user if they want to continue with remaining merges
+                        // ALWAYS stop remaining merges on ANY error
                         if (i < checkedBoxes.length - 1) {
                             const remaining = checkedBoxes.length - i - 1;
-                            let continuePrompt;
-
-                            if (shouldStopAll) {
-                                alert(`CRITICAL ERROR: A merge partially completed (update succeeded but delete failed). Stopping all remaining merges for safety. Please check Firefly III for duplicate transactions that need manual cleanup.`);
-                                shouldStop = true;
-                                break;
-                            } else {
-                                const continueProcessing = confirm(
-                                    `Merge failed for this transaction pair.\n\n` +
-                                    `${remaining} pair(s) remaining.\n\n` +
-                                    `Do you want to continue merging the remaining pairs?`
-                                );
-                                if (!continueProcessing) {
-                                    shouldStop = true;
-                                    break;
-                                }
-                            }
+                            alert(alertMessage + `\n\n${remaining} merge(s) cancelled.`);
+                            shouldStop = true;
+                            break;
                         }
                     } else {
                         // Still pending or processing, wait and poll again
@@ -368,6 +364,16 @@ function checkForDuplicateTransactions() {
                     <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                 </td></tr>`;
                 completed++;
+
+                // Stop remaining merges on network/submission errors
+                if (i < checkedBoxes.length - 1) {
+                    const remaining = checkedBoxes.length - i - 1;
+                    alert(`ERROR: Failed to submit or process merge request.\n\n` +
+                          `This could indicate network issues or server problems.\n\n` +
+                          `Stopping all remaining merges.\n\n${remaining} merge(s) cancelled.`);
+                    shouldStop = true;
+                    break;
+                }
             }
 
             // Update progress
