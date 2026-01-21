@@ -3,7 +3,7 @@
 # =============================================================================
 # Builder stage - install dependencies with uv
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -19,17 +19,15 @@ RUN uv sync --frozen --no-dev --no-install-project
 # =============================================================================
 # Final stage - minimal runtime image
 # =============================================================================
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:3.13-slim-bookworm AS runtime
 
 WORKDIR /app
 
 # Copy the virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application files
-COPY main.py utils.py firefly_client.py matcher.py ./
-COPY templates/ ./templates/
-COPY static/ ./static/
+# Copy application files (excluding files in .dockerignore)
+COPY . .
 
 # Use the venv Python
 ENV PATH="/app/.venv/bin:$PATH"

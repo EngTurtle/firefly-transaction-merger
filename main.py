@@ -1,20 +1,30 @@
 """FastAPI application for Firefly III Transaction Merger."""
 
+import asyncio
 import json
 import logging
 import os
 import secrets
+import time
+import uuid
 from datetime import date, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
-from matcher import find_matching_pairs, parse_date, prepare_merge_update
+from firefly_iii_client.rest import ApiException
+from matcher import find_matching_pairs
+from merge_service import (
+    MergeJob,
+    cleanup_old_jobs,
+    job_store,
+    process_merge_job,
+)
 from utils import DEBUG, handle_errors, json_serial, log_exception
 
 # Configure logging for app modules
@@ -34,6 +44,13 @@ app.add_middleware(SessionMiddleware, secret_key=secret_key)
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background cleanup task."""
+    asyncio.create_task(cleanup_old_jobs())
+    logging.getLogger(__name__).info("Job cleanup task started")
 
 
 def get_client_from_session(request: Request):
@@ -66,11 +83,19 @@ async def login(request: Request, url: str = Form(...), token: str = Form(...)):
         request.session["firefly_token"] = token
 
         return RedirectResponse(url="/search", status_code=302)
-    except Exception as e:
+    except ApiException as e:
+        # Firefly API error (invalid credentials, connection error, etc.)
         log_exception(e, "login")
         return templates.TemplateResponse(
             "login.html",
             {"request": request, "error": str(e), "url": url, "logged_in": False},
+        )
+    except (ValueError, KeyError, TypeError) as e:
+        # Invalid URL format or configuration issue
+        log_exception(e, "login")
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": f"Invalid configuration: {e}", "url": url, "logged_in": False},
         )
 
 
@@ -90,7 +115,10 @@ async def search_page(request: Request):
 
     try:
         accounts = firefly_client.get_asset_accounts(client)
-    except Exception:
+    except ApiException as e:
+        # Firefly API error - log but continue with empty account list
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to fetch accounts: {e}")
         accounts = []
 
     today = date.today()
@@ -182,95 +210,57 @@ async def search(
     )
 
 
-def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
-    """Merge a deposit/withdrawal pair into a transfer.
+@app.post("/merge/{deposit_id}/{withdrawal_id}")
+async def submit_merge(
+    request: Request,
+    deposit_id: str,
+    withdrawal_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """Submit a merge job to background tasks and return job ID."""
+    # Get credentials from session
+    firefly_url = request.session.get("firefly_url")
+    firefly_token = request.session.get("firefly_token")
 
-    Returns dict with source_name and destination_name on success.
-    Raises exception on failure.
-    """
-    # Fetch both transactions
-    deposit = firefly_client.get_transaction(client, deposit_id)
-    withdrawal = firefly_client.get_transaction(client, withdrawal_id)
+    if not firefly_url or not firefly_token:
+        return {"error": "Session expired", "status": "error"}
 
-    deposit_split = deposit.get("attributes", {}).get("transactions", [{}])[0]
-    withdrawal_split = withdrawal.get("attributes", {}).get("transactions", [{}])[0]
+    # Create job
+    job_id = str(uuid.uuid4())
+    job = MergeJob(
+        job_id=job_id,
+        deposit_id=deposit_id,
+        withdrawal_id=withdrawal_id,
+        firefly_url=firefly_url,
+        firefly_token=firefly_token,
+        created_at=time.time(),
+    )
 
-    deposit_date = parse_date(deposit_split.get("date", ""))
-    withdrawal_date = parse_date(withdrawal_split.get("date", ""))
+    # Store job
+    job_store[job_id] = job
 
-    # Determine which is earlier
-    is_deposit_earlier = deposit_date <= withdrawal_date
+    # Add background task
+    background_tasks.add_task(process_merge_job, job_id)
 
-    if is_deposit_earlier:
-        earlier_id = deposit_id
-        earlier_split = deposit_split
-        later_id = withdrawal_id
-        later_split = withdrawal_split
-    else:
-        earlier_id = withdrawal_id
-        earlier_split = withdrawal_split
-        later_id = deposit_id
-        later_split = deposit_split
+    return {"job_id": job_id, "status": "queued"}
 
-    # Prepare and apply update
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
-    firefly_client.update_transaction(client, earlier_id, update_data)
 
-    # Delete the later transaction
-    firefly_client.delete_transaction(client, later_id)
+@app.get("/job-status/{job_id}")
+async def get_job_status(job_id: str):
+    """Get current status of a merge job."""
+    job = job_store.get(job_id)
+
+    if not job:
+        return {"status": "not_found"}
 
     return {
-        "source_name": withdrawal_split.get("source_name", "Unknown"),
-        "destination_name": deposit_split.get("destination_name", "Unknown"),
+        "job_id": job.job_id,
+        "status": job.status,
+        "error": job.error,
+        "error_type": job.error_type,
+        "api_error_message": job.api_error_message,
+        "result": job.result,
     }
-
-
-@app.post("/merge/{deposit_id}/{withdrawal_id}", response_class=HTMLResponse)
-@handle_errors(templates, "merge_result.html")
-async def merge(request: Request, deposit_id: str, withdrawal_id: str):
-    """Merge a deposit/withdrawal pair into a transfer."""
-    client = get_client_from_session(request)
-    if not client:
-        return templates.TemplateResponse(
-            "merge_result.html", {"request": request, "error": "Session expired"}
-        )
-
-    result = merge_pair(client, deposit_id, withdrawal_id)
-
-    return templates.TemplateResponse(
-        "merge_result.html",
-        {
-            "request": request,
-            "source_name": result["source_name"],
-            "destination_name": result["destination_name"],
-        },
-    )
-
-
-@app.post("/merge-bulk", response_class=HTMLResponse)
-@handle_errors(templates, "bulk_merge_result.html")
-async def merge_bulk(request: Request, pairs: str = Form(...)):
-    """Merge multiple deposit/withdrawal pairs."""
-    client = get_client_from_session(request)
-    if not client:
-        return templates.TemplateResponse(
-            "bulk_merge_result.html", {"request": request, "error": "Session expired"}
-        )
-
-    pair_list = [p.strip() for p in pairs.split(",") if p.strip()]
-    results = []
-
-    for pair in pair_list:
-        deposit_id, withdrawal_id = pair.split(":")
-        try:
-            merge_pair(client, deposit_id, withdrawal_id)
-            results.append({"pair": pair, "success": True})
-        except Exception as e:
-            results.append({"pair": pair, "success": False, "error": str(e)})
-
-    return templates.TemplateResponse(
-        "bulk_merge_result.html", {"request": request, "results": results}
-    )
 
 
 if __name__ == "__main__":

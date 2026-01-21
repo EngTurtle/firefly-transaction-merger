@@ -94,6 +94,12 @@ def find_matching_pairs(
 
     Returns deposits matched with their closest withdrawal (by date),
     plus any alternative matches sorted by date proximity.
+
+    Algorithm:
+    1. For each deposit, find ALL matching withdrawals (don't exclude any)
+    2. Sort matches by date proximity
+    3. Select primary match preferring withdrawals not yet assigned
+    4. All other matches become alternatives
     """
     matches = []
     used_withdrawal_ids = set()
@@ -109,12 +115,10 @@ def find_matching_pairs(
         deposit_currency = deposit_split.get("currency_id")
 
         # Collect ALL matching withdrawals for this deposit
+        # Don't exclude already-used withdrawals - user should see all options
         withdrawal_matches = []
 
         for withdrawal in withdrawals:
-            if withdrawal["id"] in used_withdrawal_ids:
-                continue
-
             withdrawal_split = get_transaction_split(withdrawal)
             if not withdrawal_split:
                 continue
@@ -142,7 +146,7 @@ def find_matching_pairs(
             if days_apart > max_business_days:
                 continue
 
-            # Found a match - add to list
+            # Found a match - add to list with usage flag
             withdrawal_matches.append(
                 WithdrawalMatch(
                     withdrawal=withdrawal,
@@ -151,16 +155,32 @@ def find_matching_pairs(
                 )
             )
 
-        # If we found any matches, sort by closest date
+        # If we found any matches, select primary and alternatives
         if withdrawal_matches:
             # Sort by days_apart (ascending - closest first)
             withdrawal_matches.sort(key=lambda m: m.days_apart)
 
-            # First match is primary, rest are alternatives
-            primary_match = withdrawal_matches[0]
-            alternatives = withdrawal_matches[1:]
+            # Select primary match: prefer unused withdrawals
+            # Find first unused withdrawal, or fall back to closest if all are used
+            primary_match = None
+            primary_index = -1
 
-            # Mark primary match as used
+            for i, match in enumerate(withdrawal_matches):
+                if match.withdrawal["id"] not in used_withdrawal_ids:
+                    primary_match = match
+                    primary_index = i
+                    break
+
+            # If all withdrawals are already used, take the closest one anyway
+            if primary_match is None:
+                primary_match = withdrawal_matches[0]
+                primary_index = 0
+
+            # All other matches become alternatives (including the primary if we want)
+            # Remove primary from the list to create alternatives
+            alternatives = withdrawal_matches[:primary_index] + withdrawal_matches[primary_index + 1:]
+
+            # Mark primary match as used for subsequent deposits
             used_withdrawal_ids.add(primary_match.withdrawal["id"])
 
             # Create matched pair with alternatives

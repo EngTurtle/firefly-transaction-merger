@@ -247,6 +247,24 @@ h3 {
     margin: 0;
 }
 
+.merge-critical-error {
+    background: #ffcccc;
+    border: 2px solid #cc0000;
+}
+
+.merge-critical-error td {
+    background: #ffcccc;
+    font-weight: bold;
+}
+
+.merge-critical-error .error {
+    display: inline;
+    color: #cc0000;
+    background: none;
+    padding: 0;
+    margin: 0;
+}
+
 .search-form button.htmx-request {
     background: #85c1e9;
 }
@@ -389,6 +407,62 @@ h3 {
 
 .alt-merge-btn:hover:not(:disabled) {
     background: #2980b9;
+}
+
+/* Duplicate transaction warning banner */
+.duplicate-warning {
+    background: #fff3cd;
+    border: 2px solid #f39c12;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #856404;
+}
+
+.duplicate-warning strong {
+    display: block;
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+    color: #d9534f;
+}
+
+.duplicate-warning p {
+    margin: 8px 0;
+}
+
+.duplicate-warning em {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+/* Highlight duplicate transaction rows */
+.results-table tbody tr.duplicate-transaction {
+    background: #fff3cd;
+    border-left: 4px solid #d9534f;
+}
+
+.results-table tbody tr.duplicate-transaction td {
+    background: #fff3cd;
+}
+
+/* Processing state for rows being merged */
+.results-table tbody tr.processing {
+    background: #fff9e6;
+    border-left: 4px solid #f39c12;
+    transition: background 0.3s, border-left 0.3s;
+}
+
+.results-table tbody tr.processing td {
+    opacity: 0.7;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+}
+
+.results-table tbody tr.processing {
+    animation: pulse 1.5s ease-in-out infinite;
 }
 
 @media (max-width: 768px) {
