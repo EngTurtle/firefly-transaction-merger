@@ -27,7 +27,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application files
-COPY main.py utils.py firefly_client.py matcher.py ./
+COPY main.py utils.py firefly_client.py matcher.py merge_service.py ./
 COPY templates/ ./templates/
 COPY static/ ./static/
 

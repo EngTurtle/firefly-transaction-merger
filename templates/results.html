@@ -79,12 +79,9 @@
             <td>{{ match.primary_match.days_apart }}</td>
             <td>
                 <button
-                    hx-post="/merge/{{ match.deposit.id }}/{{ match.primary_match.withdrawal.id }}"
-                    hx-target="#row-{{ match.deposit.id }}-{{ match.primary_match.withdrawal.id }}"
-                    hx-swap="outerHTML"
-                    hx-disabled-elt="this"
-                    class="merge-btn">
-                    <span class="htmx-indicator">...</span>
+                    class="merge-btn single-merge-btn"
+                    data-deposit-id="{{ match.deposit.id }}"
+                    data-withdrawal-id="{{ match.primary_match.withdrawal.id }}">
                     <span class="default-text">Merge</span>
                 </button>
             </td>
@@ -120,9 +117,84 @@
 </table>
 
 <script>
+// Validate for duplicate transaction IDs
+function checkForDuplicateTransactions() {
+    const rows = document.querySelectorAll('.results-table tbody tr[data-deposit-id]');
+    const depositIds = new Map(); // depositId -> count
+    const withdrawalIds = new Map(); // withdrawalId -> count
+    const duplicateRows = new Set();
+
+    // Collect all transaction IDs
+    rows.forEach(row => {
+        const depositId = row.dataset.depositId;
+        const rowId = row.id; // row-{depositId}-{withdrawalId}
+        const withdrawalId = rowId.split('-')[2];
+
+        // Track deposit IDs
+        if (!depositIds.has(depositId)) {
+            depositIds.set(depositId, []);
+        }
+        depositIds.get(depositId).push(row);
+
+        // Track withdrawal IDs
+        if (!withdrawalIds.has(withdrawalId)) {
+            withdrawalIds.set(withdrawalId, []);
+        }
+        withdrawalIds.get(withdrawalId).push(row);
+    });
+
+    // Find duplicates
+    const duplicateDeposits = [];
+    const duplicateWithdrawals = [];
+
+    depositIds.forEach((rows, id) => {
+        if (rows.length > 1) {
+            duplicateDeposits.push({id, count: rows.length});
+            rows.forEach(row => duplicateRows.add(row));
+        }
+    });
+
+    withdrawalIds.forEach((rows, id) => {
+        if (rows.length > 1) {
+            duplicateWithdrawals.push({id, count: rows.length});
+            rows.forEach(row => duplicateRows.add(row));
+        }
+    });
+
+    // Mark duplicate rows visually
+    duplicateRows.forEach(row => row.classList.add('duplicate-transaction'));
+
+    // Show warning banner if duplicates found
+    if (duplicateDeposits.length > 0 || duplicateWithdrawals.length > 0) {
+        const warningHtml = `
+            <div class="duplicate-warning">
+                <strong>⚠️ Warning: Duplicate Transactions Detected</strong>
+                <p>The following transactions appear multiple times in the results. This may indicate that the same transaction is matched with different pairs. Please review carefully before merging.</p>
+                ${duplicateDeposits.length > 0 ? `<p><strong>Duplicate Deposits:</strong> ${duplicateDeposits.map(d => `ID ${d.id} (${d.count}x)`).join(', ')}</p>` : ''}
+                ${duplicateWithdrawals.length > 0 ? `<p><strong>Duplicate Withdrawals:</strong> ${duplicateWithdrawals.map(w => `ID ${w.id} (${w.count}x)`).join(', ')}</p>` : ''}
+                <p><em>Merging duplicate transactions may cause errors. Consider adjusting search criteria to avoid duplicates.</em></p>
+            </div>
+        `;
+
+        const resultsTable = document.querySelector('.results-table');
+        resultsTable.insertAdjacentHTML('beforebegin', warningHtml);
+
+        return {
+            hasDuplicates: true,
+            duplicateDeposits,
+            duplicateWithdrawals
+        };
+    }
+
+    return { hasDuplicates: false };
+}
+
 (function() {
     const selectAll = document.getElementById('select-all');
     const mergeBtn = document.getElementById('merge-selected-btn');
+
+    // Check for duplicates on page load
+    const duplicateCheck = checkForDuplicateTransactions();
 
     function updateMergeButton() {
         const checked = document.querySelectorAll('.merge-checkbox:checked');
@@ -159,12 +231,33 @@
 
         if (checkedBoxes.length === 0) return;
 
+        // Validate for duplicate transaction IDs in selected items
+        const selectedDepositIds = new Set();
+        const selectedWithdrawalIds = new Set();
+        const duplicates = [];
+
+        for (const cb of checkedBoxes) {
+            const [depositId, withdrawalId] = cb.value.split(':');
+
+            if (selectedDepositIds.has(depositId)) {
+                duplicates.push(`Deposit ID ${depositId}`);
+            }
+            if (selectedWithdrawalIds.has(withdrawalId)) {
+                duplicates.push(`Withdrawal ID ${withdrawalId}`);
+            }
+
+            selectedDepositIds.add(depositId);
+            selectedWithdrawalIds.add(withdrawalId);
+        }
+
+        if (duplicates.length > 0) {
+            alert(`Cannot merge: Duplicate transaction IDs detected in selection:\n\n${duplicates.join('\n')}\n\nPlease deselect duplicate transactions before merging.`);
+            return;
+        }
+
         // Start merging
         isMerging = true;
         shouldStop = false;
-        currentMergeIndex = 0;
-
-        // Change button to "Stop"
         mergeBtn.querySelector('.default-text').textContent = 'Stop Merge';
         mergeBtn.disabled = false;
 
@@ -172,71 +265,80 @@
         selectAll.disabled = true;
         document.querySelectorAll('.merge-checkbox').forEach(cb => cb.disabled = true);
 
+        const totalCount = checkedBoxes.length;
+        let completed = 0;
+        const pollInterval = 500;
+
         // Process each pair sequentially
         for (let i = 0; i < checkedBoxes.length; i++) {
             if (shouldStop) {
                 break;
             }
 
-            currentMergeIndex = i;
-            const checkbox = checkedBoxes[i];
-            const [depositId, withdrawalId] = checkbox.value.split(':');
+            const cb = checkedBoxes[i];
+            const [depositId, withdrawalId] = cb.value.split(':');
             const row = document.getElementById(`row-${depositId}-${withdrawalId}`);
 
-            // Mark row as processing
-            row.classList.add('processing');
-
             try {
-                // Call single merge endpoint
-                await new Promise((resolve, reject) => {
-                    const rowId = `row-${depositId}-${withdrawalId}`;
+                // Mark row as processing
+                row.classList.add('processing');
 
-                    // HTMX doesn't return a proper promise, so we listen for events
-                    const successHandler = function(evt) {
-                        // Check if this event is for our specific row
-                        if (evt.detail.target) {
-                            const targetId = evt.detail.target.id;
-                            // Also check if we're swapping a row that matches our pattern
-                            if (targetId === rowId || evt.detail.pathInfo.requestPath.includes(`/merge/${depositId}/${withdrawalId}`)) {
-                                document.body.removeEventListener('htmx:afterSwap', successHandler);
-                                document.body.removeEventListener('htmx:responseError', errorHandler);
-                                resolve();
-                            }
-                        }
-                    };
-
-                    // Handle errors
-                    const errorHandler = function(evt) {
-                        if (evt.detail.pathInfo && evt.detail.pathInfo.requestPath.includes(`/merge/${depositId}/${withdrawalId}`)) {
-                            document.body.removeEventListener('htmx:afterSwap', successHandler);
-                            document.body.removeEventListener('htmx:responseError', errorHandler);
-                            // Still resolve - we'll show the error in the UI
-                            resolve();
-                        }
-                    };
-
-                    document.body.addEventListener('htmx:afterSwap', successHandler);
-                    document.body.addEventListener('htmx:responseError', errorHandler);
-
-                    // Trigger the HTMX request
-                    htmx.ajax('POST', `/merge/${depositId}/${withdrawalId}`, {
-                        target: `#${rowId}`,
-                        swap: 'outerHTML'
-                    });
+                // Submit job
+                const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {
+                    method: 'POST'
                 });
+                const data = await response.json();
 
-                // Small delay to ensure UI updates
-                await new Promise(resolve => setTimeout(resolve, 100));
+                if (data.error) {
+                    row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                        <span class="error">${data.error}</span>
+                        <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                    </td></tr>`;
+                    completed++;
+                    continue;
+                }
+
+                // Poll for job completion
+                const jobId = data.job_id;
+                let jobComplete = false;
+
+                while (!jobComplete && !shouldStop) {
+                    const statusResponse = await fetch(`/job-status/${jobId}`);
+                    const status = await statusResponse.json();
+
+                    if (status.status === 'completed') {
+                        row.outerHTML = `<tr class="merge-success"><td colspan="10">
+                            Merged successfully! Created transfer from ${status.result.source_name}
+                            to ${status.result.destination_name}.
+                        </td></tr>`;
+                        completed++;
+                        jobComplete = true;
+                    } else if (status.status === 'failed') {
+                        row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                            <span class="error">Merge failed: ${status.error}</span>
+                            <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                        </td></tr>`;
+                        completed++;
+                        jobComplete = true;
+                    } else {
+                        // Still pending or processing, wait and poll again
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                    }
+                }
 
             } catch (error) {
                 console.error(`Failed to merge ${depositId}:${withdrawalId}`, error);
-                // Continue with next pair even if this one failed
+                row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                    <span class="error">Failed: ${error.message}</span>
+                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                </td></tr>`;
+                completed++;
             }
 
-            // Update button text to show progress
+            // Update progress
             if (!shouldStop) {
                 mergeBtn.querySelector('.default-text').textContent =
-                    `Stop Merge (${i + 1}/${checkedBoxes.length})`;
+                    `Stop Merge (${completed}/${totalCount})`;
             }
         }
 
@@ -244,16 +346,76 @@
         isMerging = false;
         shouldStop = false;
         mergeBtn.disabled = true;
-
-        // Re-enable checkboxes that weren't merged
         selectAll.disabled = false;
         document.querySelectorAll('.merge-checkbox').forEach(cb => cb.disabled = false);
 
-        // Update button text
         const remainingChecked = document.querySelectorAll('.merge-checkbox:checked').length;
         mergeBtn.querySelector('.default-text').textContent =
             remainingChecked > 0 ? `Merge Selected (${remainingChecked})` : 'Merge Selected (0)';
         mergeBtn.disabled = remainingChecked === 0;
+    });
+
+    // Handle individual merge button clicks
+    document.querySelectorAll('.single-merge-btn').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const depositId = this.dataset.depositId;
+            const withdrawalId = this.dataset.withdrawalId;
+            const row = document.getElementById(`row-${depositId}-${withdrawalId}`);
+
+            // Disable button
+            this.disabled = true;
+            this.querySelector('.default-text').textContent = 'Queuing...';
+
+            try {
+                // Submit job
+                const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                        <span class="error">${data.error}</span>
+                        <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                    </td></tr>`;
+                    return;
+                }
+
+                this.querySelector('.default-text').textContent = 'Processing...';
+                row.classList.add('processing');
+
+                // Poll for status
+                const jobId = data.job_id;
+                const pollInterval = 500;
+
+                while (true) {
+                    const statusResponse = await fetch(`/job-status/${jobId}`);
+                    const status = await statusResponse.json();
+
+                    if (status.status === 'completed') {
+                        row.outerHTML = `<tr class="merge-success"><td colspan="10">
+                            Merged successfully! Created transfer from ${status.result.source_name}
+                            to ${status.result.destination_name}.
+                        </td></tr>`;
+                        break;
+                    } else if (status.status === 'failed') {
+                        row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                            <span class="error">Merge failed: ${status.error}</span>
+                            <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                        </td></tr>`;
+                        break;
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
+                }
+            } catch (error) {
+                console.error('Merge failed:', error);
+                row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                    <span class="error">Merge failed: ${error.message}</span>
+                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                </td></tr>`;
+            }
+        });
     });
 })();
 

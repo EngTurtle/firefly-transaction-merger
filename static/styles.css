@@ -391,6 +391,42 @@ h3 {
     background: #2980b9;
 }
 
+/* Duplicate transaction warning banner */
+.duplicate-warning {
+    background: #fff3cd;
+    border: 2px solid #f39c12;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #856404;
+}
+
+.duplicate-warning strong {
+    display: block;
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+    color: #d9534f;
+}
+
+.duplicate-warning p {
+    margin: 8px 0;
+}
+
+.duplicate-warning em {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+/* Highlight duplicate transaction rows */
+.results-table tbody tr.duplicate-transaction {
+    background: #fff3cd;
+    border-left: 4px solid #d9534f;
+}
+
+.results-table tbody tr.duplicate-transaction td {
+    background: #fff3cd;
+}
+
 /* Processing state for rows being merged */
 .results-table tbody tr.processing {
     background: #fff9e6;
