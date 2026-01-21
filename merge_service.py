@@ -83,26 +83,22 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
     update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
 
     # CRITICAL: Delete MUST only happen if update succeeds
-    # Wrap in try-except to ensure transactional behavior
-    try:
-        firefly_client.update_transaction(client, earlier_id, update_data)
-    except Exception as update_error:
-        # Update failed - do NOT delete the later transaction
-        # Re-raise to propagate the error up
-        raise Exception(
-            f"Failed to update transaction {earlier_id}: {str(update_error)}"
-        ) from update_error
+    # If update fails, exception propagates immediately without attempting delete
+    firefly_client.update_transaction(client, earlier_id, update_data)
 
     # Update succeeded - now safe to delete the later transaction
     try:
         firefly_client.delete_transaction(client, later_id)
-    except Exception as delete_error:
-        # Delete failed but update succeeded - this is a problem
+    except Exception as e:
+        # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
-        raise Exception(
-            f"Critical: Updated transaction {earlier_id} to transfer, but failed to delete {later_id}: {str(delete_error)}. "
-            f"Manual cleanup may be required."
-        ) from delete_error
+        # Log the context and re-raise original exception
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"CRITICAL: Updated transaction {earlier_id} to transfer, "
+            f"but failed to delete {later_id}. Manual cleanup required."
+        )
+        raise  # Re-raise original exception without modification
 
     return {
         "source_name": withdrawal_split.get("source_name", "Unknown"),
@@ -167,28 +163,24 @@ async def merge_pair_async(
     update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
 
     # CRITICAL: Delete MUST only happen if update succeeds
-    # Wrap in try-except to ensure transactional behavior
-    try:
-        await asyncio.to_thread(
-            firefly_client.update_transaction, client, earlier_id, update_data
-        )
-    except Exception as update_error:
-        # Update failed - do NOT delete the later transaction
-        # Re-raise to propagate the error up
-        raise Exception(
-            f"Failed to update transaction {earlier_id}: {str(update_error)}"
-        ) from update_error
+    # If update fails, exception propagates immediately without attempting delete
+    await asyncio.to_thread(
+        firefly_client.update_transaction, client, earlier_id, update_data
+    )
 
     # Update succeeded - now safe to delete the later transaction
     try:
         await asyncio.to_thread(firefly_client.delete_transaction, client, later_id)
-    except Exception as delete_error:
-        # Delete failed but update succeeded - this is a problem
+    except Exception as e:
+        # Delete failed but update succeeded - this is a critical problem
         # The earlier transaction is now a transfer, but later one still exists
-        raise Exception(
-            f"Critical: Updated transaction {earlier_id} to transfer, but failed to delete {later_id}: {str(delete_error)}. "
-            f"Manual cleanup may be required."
-        ) from delete_error
+        # Log the context and re-raise original exception
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"CRITICAL: Updated transaction {earlier_id} to transfer, "
+            f"but failed to delete {later_id}. Manual cleanup required."
+        )
+        raise  # Re-raise original exception without modification
 
     return {
         "source_name": withdrawal_split.get("source_name", "Unknown"),
