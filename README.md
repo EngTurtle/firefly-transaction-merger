@@ -76,6 +76,19 @@ uv sync
 uv run uvicorn main:app --reload
 ```
 
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
+
+# Run with coverage report
+uv run pytest --cov=matcher --cov-report=term-missing
+```
+
 ### Building the Docker Image
 
 ```bash
