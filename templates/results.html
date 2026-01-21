@@ -314,20 +314,20 @@ function checkForDuplicateTransactions() {
                         completed++;
                         jobComplete = true;
                     } else if (status.status === 'failed') {
-                        // Determine error severity and message based on error_type
+                        // Use raw API error message when available, fall back to full error
+                        const apiErrorMessage = status.api_error_message || status.error || 'Unknown error occurred';
+
+                        // Determine error class and alert message based on error_type
                         let errorClass = 'merge-error';
-                        let errorMessage = status.error || 'Unknown error occurred';
                         let alertMessage = '';
 
                         if (status.error_type === 'delete_failed_after_update') {
                             errorClass = 'merge-critical-error';
-                            errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
                             alertMessage = 'CRITICAL ERROR: A merge partially completed (update succeeded but delete failed).\n\n' +
                                          'A transaction was successfully converted to a transfer, but the duplicate transaction was NOT deleted.\n\n' +
                                          'Stopping all remaining merges. Check Firefly III for duplicate transactions needing manual cleanup.';
                         } else if (status.error_type === 'update_failed') {
                             errorClass = 'merge-error';
-                            errorMessage = 'Update failed: ' + errorMessage;
                             alertMessage = 'ERROR: Failed to update transaction to transfer.\n\n' +
                                          'This could indicate API connection issues, permission problems, or invalid transaction state.\n\n' +
                                          'Stopping all remaining merges to prevent cascading failures.';
@@ -338,7 +338,7 @@ function checkForDuplicateTransactions() {
                         }
 
                         row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
-                            <span class="error">${errorMessage}</span>
+                            <span class="error">${apiErrorMessage}</span>
                             <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                         </td></tr>`;
                         completed++;

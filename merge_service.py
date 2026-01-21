@@ -45,6 +45,7 @@ class MergeJob:
     status: JobStatus = JobStatus.PENDING
     error: Optional[str] = None
     error_type: Optional[str] = None  # "update_failed", "delete_failed_after_update", "other"
+    api_error_message: Optional[str] = None  # Raw API error message for display
     result: Optional[dict] = None
     created_at: float = 0.0
     completed_at: Optional[float] = None
@@ -255,6 +256,8 @@ async def process_merge_job(job_id: str) -> None:
         job.status = JobStatus.FAILED
         job.error = str(e)
         job.error_type = "update_failed"
+        # Extract original API error message from the wrapped exception
+        job.api_error_message = str(e.__cause__) if e.__cause__ else str(e)
         job.completed_at = time.time()
         logger.error(f"Job {job_id} failed during update: {e}")
         if DEBUG:
@@ -265,6 +268,8 @@ async def process_merge_job(job_id: str) -> None:
         job.status = JobStatus.FAILED
         job.error = str(e)
         job.error_type = "delete_failed_after_update"
+        # Extract original API error message from the wrapped exception
+        job.api_error_message = str(e.__cause__) if e.__cause__ else str(e)
         job.completed_at = time.time()
         logger.error(f"Job {job_id} CRITICAL FAILURE - partial merge: {e}")
         if DEBUG:
@@ -275,6 +280,8 @@ async def process_merge_job(job_id: str) -> None:
         job.status = JobStatus.FAILED
         job.error = str(e)
         job.error_type = "other"
+        # For unexpected errors, use the error directly
+        job.api_error_message = str(e)
         job.completed_at = time.time()
         logger.error(f"Job {job_id} failed with unexpected error: {e}")
         if DEBUG:

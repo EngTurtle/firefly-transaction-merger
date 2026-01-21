@@ -258,6 +258,7 @@ async def get_job_status(job_id: str):
         "status": job.status,
         "error": job.error,
         "error_type": job.error_type,
+        "api_error_message": job.api_error_message,
         "result": job.result,
     }
 
