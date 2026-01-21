@@ -166,13 +166,24 @@
         selectAll.disabled = true;
         document.querySelectorAll('.merge-checkbox').forEach(cb => cb.disabled = true);
 
-        // Submit all jobs and track with polling
-        const jobs = [];
-        for (const cb of checkedBoxes) {
+        const totalCount = checkedBoxes.length;
+        let completed = 0;
+        const pollInterval = 500;
+
+        // Process each pair sequentially
+        for (let i = 0; i < checkedBoxes.length; i++) {
+            if (shouldStop) {
+                break;
+            }
+
+            const cb = checkedBoxes[i];
             const [depositId, withdrawalId] = cb.value.split(':');
             const row = document.getElementById(`row-${depositId}-${withdrawalId}`);
 
             try {
+                // Mark row as processing
+                row.classList.add('processing');
+
                 // Submit job
                 const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {
                     method: 'POST'
@@ -184,69 +195,51 @@
                         <span class="error">${data.error}</span>
                         <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                     </td></tr>`;
+                    completed++;
                     continue;
                 }
 
-                jobs.push({
-                    jobId: data.job_id,
-                    depositId,
-                    withdrawalId,
-                    row,
-                    checkbox: cb
-                });
-                row.classList.add('processing');
+                // Poll for job completion
+                const jobId = data.job_id;
+                let jobComplete = false;
 
-            } catch (error) {
-                console.error(`Failed to submit ${depositId}:${withdrawalId}`, error);
-                row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                    <span class="error">Failed to submit: ${error.message}</span>
-                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                </td></tr>`;
-            }
-        }
-
-        // Poll all jobs
-        let completed = 0;
-        const pollInterval = 500;
-
-        while (jobs.length > 0 && !shouldStop) {
-            const stillPolling = [];
-
-            for (const job of jobs) {
-                try {
-                    const response = await fetch(`/job-status/${job.jobId}`);
-                    const status = await response.json();
+                while (!jobComplete && !shouldStop) {
+                    const statusResponse = await fetch(`/job-status/${jobId}`);
+                    const status = await statusResponse.json();
 
                     if (status.status === 'completed') {
-                        job.row.outerHTML = `<tr class="merge-success"><td colspan="10">
+                        row.outerHTML = `<tr class="merge-success"><td colspan="10">
                             Merged successfully! Created transfer from ${status.result.source_name}
                             to ${status.result.destination_name}.
                         </td></tr>`;
                         completed++;
+                        jobComplete = true;
                     } else if (status.status === 'failed') {
-                        job.row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                        row.outerHTML = `<tr class="merge-error"><td colspan="10">
                             <span class="error">Merge failed: ${status.error}</span>
                             <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
                         </td></tr>`;
                         completed++;
+                        jobComplete = true;
                     } else {
-                        // Still pending or processing
-                        stillPolling.push(job);
+                        // Still pending or processing, wait and poll again
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
                     }
-                } catch (error) {
-                    console.error(`Poll error for ${job.jobId}`, error);
-                    stillPolling.push(job);
                 }
+
+            } catch (error) {
+                console.error(`Failed to merge ${depositId}:${withdrawalId}`, error);
+                row.outerHTML = `<tr class="merge-error"><td colspan="10">
+                    <span class="error">Failed: ${error.message}</span>
+                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+                </td></tr>`;
+                completed++;
             }
 
-            jobs.length = 0;
-            jobs.push(...stillPolling);
-
-            mergeBtn.querySelector('.default-text').textContent =
-                `Stop Merge (${completed}/${completed + jobs.length})`;
-
-            if (jobs.length > 0) {
-                await new Promise(resolve => setTimeout(resolve, pollInterval));
+            // Update progress
+            if (!shouldStop) {
+                mergeBtn.querySelector('.default-text').textContent =
+                    `Stop Merge (${completed}/${totalCount})`;
             }
         }
 
