@@ -7,11 +7,8 @@ import os
 import secrets
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,7 +17,13 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
-from matcher import find_matching_pairs, parse_date, prepare_merge_update
+from matcher import find_matching_pairs
+from merge_service import (
+    MergeJob,
+    cleanup_old_jobs,
+    job_store,
+    process_merge_job,
+)
 from utils import DEBUG, handle_errors, json_serial, log_exception
 
 # Configure logging for app modules
@@ -42,61 +45,11 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
-# Cleanup task for old jobs
-async def cleanup_old_jobs():
-    """Periodically remove completed/failed jobs older than 1 hour."""
-    logger = logging.getLogger(__name__)
-    while True:
-        await asyncio.sleep(300)  # Run every 5 minutes
-        now = time.time()
-        to_remove = [
-            jid
-            for jid, job in job_store.items()
-            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED)
-            and job.completed_at
-            and (now - job.completed_at) > 3600
-        ]
-        for jid in to_remove:
-            del job_store[jid]
-        if to_remove:
-            logger.info(f"Cleaned up {len(to_remove)} old jobs")
-
-
 @app.on_event("startup")
 async def startup_event():
     """Start background cleanup task."""
     asyncio.create_task(cleanup_old_jobs())
     logging.getLogger(__name__).info("Job cleanup task started")
-
-
-# Job tracking infrastructure
-class JobStatus(str, Enum):
-    """Status of a background merge job."""
-
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass
-class MergeJob:
-    """Represents a background merge job."""
-
-    job_id: str
-    deposit_id: str
-    withdrawal_id: str
-    firefly_url: str
-    firefly_token: str
-    status: JobStatus = JobStatus.PENDING
-    error: Optional[str] = None
-    result: Optional[dict] = None
-    created_at: float = 0.0
-    completed_at: Optional[float] = None
-
-
-# In-memory job store
-job_store: dict[str, MergeJob] = {}
 
 
 def get_client_from_session(request: Request):
@@ -243,143 +196,6 @@ async def search(
     return templates.TemplateResponse(
         "results.html", {"request": request, "matches": matches}
     )
-
-
-def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
-    """Merge a deposit/withdrawal pair into a transfer.
-
-    Returns dict with source_name and destination_name on success.
-    Raises exception on failure.
-    """
-    # Fetch both transactions
-    deposit = firefly_client.get_transaction(client, deposit_id)
-    withdrawal = firefly_client.get_transaction(client, withdrawal_id)
-
-    deposit_split = deposit.get("attributes", {}).get("transactions", [{}])[0]
-    withdrawal_split = withdrawal.get("attributes", {}).get("transactions", [{}])[0]
-
-    deposit_date = parse_date(deposit_split.get("date", ""))
-    withdrawal_date = parse_date(withdrawal_split.get("date", ""))
-
-    # Determine which is earlier
-    is_deposit_earlier = deposit_date <= withdrawal_date
-
-    if is_deposit_earlier:
-        earlier_id = deposit_id
-        earlier_split = deposit_split
-        later_id = withdrawal_id
-        later_split = withdrawal_split
-    else:
-        earlier_id = withdrawal_id
-        earlier_split = withdrawal_split
-        later_id = deposit_id
-        later_split = deposit_split
-
-    # Prepare and apply update
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
-    firefly_client.update_transaction(client, earlier_id, update_data)
-
-    # Delete the later transaction
-    firefly_client.delete_transaction(client, later_id)
-
-    return {
-        "source_name": withdrawal_split.get("source_name", "Unknown"),
-        "destination_name": deposit_split.get("destination_name", "Unknown"),
-    }
-
-
-async def merge_pair_async(
-    firefly_url: str,
-    firefly_token: str,
-    deposit_id: str,
-    withdrawal_id: str,
-) -> dict:
-    """Async version of merge_pair that runs blocking I/O in thread pool.
-
-    Returns dict with source_name and destination_name on success.
-    Raises exception on failure.
-    """
-    # Create client
-    client = firefly_client.create_client(firefly_url, firefly_token)
-
-    # Fetch both transactions (run in thread pool to avoid blocking)
-    deposit = await asyncio.to_thread(
-        firefly_client.get_transaction, client, deposit_id
-    )
-    withdrawal = await asyncio.to_thread(
-        firefly_client.get_transaction, client, withdrawal_id
-    )
-
-    deposit_split = deposit.get("attributes", {}).get("transactions", [{}])[0]
-    withdrawal_split = withdrawal.get("attributes", {}).get("transactions", [{}])[0]
-
-    deposit_date = parse_date(deposit_split.get("date", ""))
-    withdrawal_date = parse_date(withdrawal_split.get("date", ""))
-
-    # Determine which is earlier
-    is_deposit_earlier = deposit_date <= withdrawal_date
-
-    if is_deposit_earlier:
-        earlier_id = deposit_id
-        earlier_split = deposit_split
-        later_id = withdrawal_id
-        later_split = withdrawal_split
-    else:
-        earlier_id = withdrawal_id
-        earlier_split = withdrawal_split
-        later_id = deposit_id
-        later_split = deposit_split
-
-    # Prepare and apply update (run in thread pool)
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
-    await asyncio.to_thread(
-        firefly_client.update_transaction, client, earlier_id, update_data
-    )
-
-    # Delete the later transaction (run in thread pool)
-    await asyncio.to_thread(firefly_client.delete_transaction, client, later_id)
-
-    return {
-        "source_name": withdrawal_split.get("source_name", "Unknown"),
-        "destination_name": deposit_split.get("destination_name", "Unknown"),
-    }
-
-
-async def process_merge_job(job_id: str):
-    """Background task that processes a merge job and updates job store."""
-    logger = logging.getLogger(__name__)
-    job = job_store.get(job_id)
-
-    if not job:
-        logger.error(f"Job {job_id} not found in store")
-        return
-
-    try:
-        # Update status to processing
-        job.status = JobStatus.PROCESSING
-        logger.info(
-            f"Processing merge job {job_id}: {job.deposit_id}/{job.withdrawal_id}"
-        )
-
-        # Perform the merge
-        result = await merge_pair_async(
-            job.firefly_url, job.firefly_token, job.deposit_id, job.withdrawal_id
-        )
-
-        # Update job with success
-        job.status = JobStatus.COMPLETED
-        job.result = result
-        job.completed_at = time.time()
-        logger.info(f"Job {job_id} completed successfully")
-
-    except Exception as e:
-        # Update job with failure
-        job.status = JobStatus.FAILED
-        job.error = str(e)
-        job.completed_at = time.time()
-        logger.error(f"Job {job_id} failed: {e}")
-        if DEBUG:
-            log_exception(e, f"process_merge_job {job_id}")
 
 
 @app.post("/merge/{deposit_id}/{withdrawal_id}")
