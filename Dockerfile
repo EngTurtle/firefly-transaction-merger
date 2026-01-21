@@ -26,10 +26,8 @@ WORKDIR /app
 # Copy the virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application files
-COPY main.py utils.py firefly_client.py matcher.py merge_service.py ./
-COPY templates/ ./templates/
-COPY static/ ./static/
+# Copy application files (excluding files in .dockerignore)
+COPY . .
 
 # Use the venv Python
 ENV PATH="/app/.venv/bin:$PATH"
