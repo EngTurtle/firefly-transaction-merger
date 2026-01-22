@@ -22,5 +22,14 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    <script>
+        // Handle 401 Unauthorized responses from HTMX requests
+        document.body.addEventListener('htmx:responseError', function(evt) {
+            if (evt.detail.xhr.status === 401) {
+                alert('Your Firefly III session has expired. Please log in again.');
+                window.location.href = '/';
+            }
+        });
+    </script>
 </body>
 </html>

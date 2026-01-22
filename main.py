@@ -11,12 +11,13 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import firefly_client
+from firefly_iii_client.exceptions import UnauthorizedException
 from firefly_iii_client.rest import ApiException
 from matcher import find_matching_pairs
 from merge_service import (
@@ -65,8 +66,19 @@ def get_client_from_session(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Show login page or redirect to search if already logged in."""
-    if get_client_from_session(request):
-        return RedirectResponse(url="/search", status_code=302)
+    # Check if session exists
+    if request.session.get("firefly_url") and request.session.get("firefly_token"):
+        # Validate token before redirecting
+        client = get_client_from_session(request)
+        if client and firefly_client.validate_client(client):
+            return RedirectResponse(url="/search", status_code=302)
+        # If validation failed, clear session and show login with error
+        request.session.clear()
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Your session has expired. Please log in again.", "logged_in": False},
+        )
+
     return templates.TemplateResponse(
         "login.html", {"request": request, "logged_in": False}
     )
@@ -113,6 +125,11 @@ async def search_page(request: Request):
     if not client:
         return RedirectResponse(url="/", status_code=302)
 
+    # Validate session token
+    if not firefly_client.validate_client(client):
+        request.session.clear()
+        return RedirectResponse(url="/", status_code=302)
+
     try:
         accounts = firefly_client.get_asset_accounts(client)
     except ApiException as e:
@@ -138,7 +155,6 @@ async def search_page(request: Request):
 
 
 @app.post("/search", response_class=HTMLResponse)
-@handle_errors(templates, "results.html")
 async def search(
     request: Request,
     start_date: str = Form(...),
@@ -155,59 +171,72 @@ async def search(
             "results.html", {"request": request, "error": "Session expired"}
         )
 
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
 
-    # Fetch deposits
-    deposits = firefly_client.get_transactions(client, "deposit", start, end, limit)
+        # Fetch deposits
+        deposits = firefly_client.get_transactions(client, "deposit", start, end, limit)
 
-    # Sort by date
-    deposits.sort(
-        key=lambda x: x.get("attributes", {}).get("transactions", [{}])[0].get(
-            "date", ""
-        ),
-        reverse=(order == "desc"),
-    )
+        # Sort by date
+        deposits.sort(
+            key=lambda x: x.get("attributes", {}).get("transactions", [{}])[0].get(
+                "date", ""
+            ),
+            reverse=(order == "desc"),
+        )
 
-    if limit:
-        deposits = deposits[:limit]
+        if limit:
+            deposits = deposits[:limit]
 
-    # Fetch withdrawals (need more to find matches)
-    withdrawals = firefly_client.get_transactions(
-        client, "withdrawal", start, end, None
-    )
+        # Fetch withdrawals (need more to find matches)
+        withdrawals = firefly_client.get_transactions(
+            client, "withdrawal", start, end, None
+        )
 
-    # Filter by accounts if specified
-    if account_id:
-        account_ids = set(account_id)
-        deposits = [
-            d
-            for d in deposits
-            if d.get("attributes", {})
-            .get("transactions", [{}])[0]
-            .get("destination_id")
-            in account_ids
-        ]
+        # Filter by accounts if specified
+        if account_id:
+            account_ids = set(account_id)
+            deposits = [
+                d
+                for d in deposits
+                if d.get("attributes", {})
+                .get("transactions", [{}])[0]
+                .get("destination_id")
+                in account_ids
+            ]
 
-    # Find matches
-    matches = find_matching_pairs(deposits, withdrawals, business_days)
+        # Find matches
+        matches = find_matching_pairs(deposits, withdrawals, business_days)
 
-    # Pre-serialize alternatives to JSON strings for template
-    for match in matches:
-        # Convert WithdrawalMatch objects to dicts and serialize with custom handler
-        alternatives_dicts = [
-            {
-                "withdrawal": alt.withdrawal,
-                "withdrawal_split": alt.withdrawal_split,
-                "days_apart": alt.days_apart,
-            }
-            for alt in match.alternatives
-        ]
-        match.alternatives_json = json.dumps(alternatives_dicts, default=json_serial)
+        # Pre-serialize alternatives to JSON strings for template
+        for match in matches:
+            # Convert WithdrawalMatch objects to dicts and serialize with custom handler
+            alternatives_dicts = [
+                {
+                    "withdrawal": alt.withdrawal,
+                    "withdrawal_split": alt.withdrawal_split,
+                    "days_apart": alt.days_apart,
+                }
+                for alt in match.alternatives
+            ]
+            match.alternatives_json = json.dumps(alternatives_dicts, default=json_serial)
 
-    return templates.TemplateResponse(
-        "results.html", {"request": request, "matches": matches}
-    )
+        return templates.TemplateResponse(
+            "results.html", {"request": request, "matches": matches}
+        )
+
+    except UnauthorizedException as e:
+        # Token expired - return 401 to browser
+        if DEBUG:
+            logger = logging.getLogger(__name__)
+            logger.error(f"search: 401 Unauthorized - {e}")
+        request.session.clear()
+        return Response(
+            content="Unauthorized: Your Firefly III session has expired",
+            status_code=401,
+            media_type="text/plain"
+        )
 
 
 @app.post("/merge/{deposit_id}/{withdrawal_id}")

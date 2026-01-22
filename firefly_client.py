@@ -13,6 +13,7 @@ from firefly_iii_client import (
     TransactionUpdate,
 )
 from firefly_iii_client.configuration import Configuration
+from firefly_iii_client.exceptions import UnauthorizedException
 from firefly_iii_client.rest import ApiException
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,19 @@ def validate_connection(client: firefly_iii_client.ApiClient) -> dict[str, Any]:
     api = AboutApi(client)
     response = api.get_about()
     return response.data.to_dict()
+
+
+def validate_client(client: firefly_iii_client.ApiClient) -> bool:
+    """Validate that the client's token is still valid with Firefly API.
+
+    Returns True if valid, False if 401 Unauthorized.
+    Raises other exceptions for connection errors, etc.
+    """
+    try:
+        validate_connection(client)
+        return True
+    except UnauthorizedException:
+        return False
 
 
 def get_asset_accounts(client: firefly_iii_client.ApiClient) -> list[dict[str, Any]]:
