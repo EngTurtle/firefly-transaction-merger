@@ -117,88 +117,61 @@
 </table>
 
 <script>
-// Validate for duplicate transaction IDs
-function checkForDuplicateTransactions() {
-    const rows = document.querySelectorAll('.results-table tbody tr[data-deposit-id]');
-    const depositIds = new Map(); // depositId -> count
-    const withdrawalIds = new Map(); // withdrawalId -> count
-    const duplicateRows = new Set();
-
-    // Collect all transaction IDs
-    rows.forEach(row => {
-        const depositId = row.dataset.depositId;
-        const rowId = row.id; // row-{depositId}-{withdrawalId}
-        const withdrawalId = rowId.split('-')[2];
-
-        // Track deposit IDs
-        if (!depositIds.has(depositId)) {
-            depositIds.set(depositId, []);
-        }
-        depositIds.get(depositId).push(row);
-
-        // Track withdrawal IDs
-        if (!withdrawalIds.has(withdrawalId)) {
-            withdrawalIds.set(withdrawalId, []);
-        }
-        withdrawalIds.get(withdrawalId).push(row);
-    });
-
-    // Find duplicates
-    const duplicateDeposits = [];
-    const duplicateWithdrawals = [];
-
-    depositIds.forEach((rows, id) => {
-        if (rows.length > 1) {
-            duplicateDeposits.push({id, count: rows.length});
-            rows.forEach(row => duplicateRows.add(row));
-        }
-    });
-
-    withdrawalIds.forEach((rows, id) => {
-        if (rows.length > 1) {
-            duplicateWithdrawals.push({id, count: rows.length});
-            rows.forEach(row => duplicateRows.add(row));
-        }
-    });
-
-    // Mark duplicate rows visually
-    duplicateRows.forEach(row => row.classList.add('duplicate-transaction'));
-
-    // Show warning banner if duplicates found
-    if (duplicateDeposits.length > 0 || duplicateWithdrawals.length > 0) {
-        const warningHtml = `
-            <div class="duplicate-warning">
-                <strong>⚠️ Warning: Duplicate Transactions Detected</strong>
-                <p>The following transactions appear multiple times in the results. This may indicate that the same transaction is matched with different pairs. Please review carefully before merging.</p>
-                ${duplicateDeposits.length > 0 ? `<p><strong>Duplicate Deposits:</strong> ${duplicateDeposits.map(d => `ID ${d.id} (${d.count}x)`).join(', ')}</p>` : ''}
-                ${duplicateWithdrawals.length > 0 ? `<p><strong>Duplicate Withdrawals:</strong> ${duplicateWithdrawals.map(w => `ID ${w.id} (${w.count}x)`).join(', ')}</p>` : ''}
-                <p><em>Merging duplicate transactions may cause errors. Consider adjusting search criteria to avoid duplicates.</em></p>
-            </div>
-        `;
-
-        const resultsTable = document.querySelector('.results-table');
-        resultsTable.insertAdjacentHTML('beforebegin', warningHtml);
-
-        return {
-            hasDuplicates: true,
-            duplicateDeposits,
-            duplicateWithdrawals
-        };
-    }
-
-    return { hasDuplicates: false };
-}
+// Global reference to updateMergeButton so selectAlternative can call it
+let updateMergeButton;
 
 (function() {
     const selectAll = document.getElementById('select-all');
     const mergeBtn = document.getElementById('merge-selected-btn');
 
-    // Check for duplicates on page load
-    const duplicateCheck = checkForDuplicateTransactions();
+    // Create or get warning element for duplicate feedback
+    const bulkActions = document.querySelector('.bulk-actions');
+    let warningDiv = document.getElementById('selection-warning');
+    if (!warningDiv) {
+        warningDiv = document.createElement('div');
+        warningDiv.id = 'selection-warning';
+        warningDiv.className = 'selection-warning';
+        warningDiv.style.display = 'none';
+        bulkActions.appendChild(warningDiv);
+    }
 
-    function updateMergeButton() {
+    updateMergeButton = function() {
         const checked = document.querySelectorAll('.merge-checkbox:checked');
-        mergeBtn.disabled = checked.length === 0;
+
+        // Validate for duplicate transaction IDs in selected items
+        const selectedDepositIds = new Set();
+        const selectedWithdrawalIds = new Set();
+        const duplicates = [];
+
+        for (const cb of checked) {
+            const [depositId, withdrawalId] = cb.value.split(':');
+
+            if (selectedDepositIds.has(depositId)) {
+                duplicates.push(`Deposit ID ${depositId}`);
+            }
+            if (selectedWithdrawalIds.has(withdrawalId)) {
+                duplicates.push(`Withdrawal ID ${withdrawalId}`);
+            }
+
+            selectedDepositIds.add(depositId);
+            selectedWithdrawalIds.add(withdrawalId);
+        }
+
+        // Show/hide warning and disable/enable button based on duplicates
+        if (duplicates.length > 0) {
+            warningDiv.innerHTML = `
+                <strong>⚠️ Cannot merge: Duplicate transactions selected</strong>
+                <p>The following transaction IDs are selected in multiple pairs:</p>
+                <ul>${duplicates.map(d => `<li>${d}</li>`).join('')}</ul>
+                <p>Please deselect duplicate transactions before merging.</p>
+            `;
+            warningDiv.style.display = 'block';
+            mergeBtn.disabled = true;
+        } else {
+            warningDiv.style.display = 'none';
+            mergeBtn.disabled = checked.length === 0;
+        }
+
         mergeBtn.querySelector('.default-text').textContent = `Merge Selected (${checked.length})`;
     }
 
@@ -231,29 +204,8 @@ function checkForDuplicateTransactions() {
 
         if (checkedBoxes.length === 0) return;
 
-        // Validate for duplicate transaction IDs in selected items
-        const selectedDepositIds = new Set();
-        const selectedWithdrawalIds = new Set();
-        const duplicates = [];
-
-        for (const cb of checkedBoxes) {
-            const [depositId, withdrawalId] = cb.value.split(':');
-
-            if (selectedDepositIds.has(depositId)) {
-                duplicates.push(`Deposit ID ${depositId}`);
-            }
-            if (selectedWithdrawalIds.has(withdrawalId)) {
-                duplicates.push(`Withdrawal ID ${withdrawalId}`);
-            }
-
-            selectedDepositIds.add(depositId);
-            selectedWithdrawalIds.add(withdrawalId);
-        }
-
-        if (duplicates.length > 0) {
-            alert(`Cannot merge: Duplicate transaction IDs detected in selection:\n\n${duplicates.join('\n')}\n\nPlease deselect duplicate transactions before merging.`);
-            return;
-        }
+        // No need to validate duplicates here - already done in updateMergeButton()
+        // Button would be disabled if duplicates exist
 
         // Start merging
         isMerging = true;
@@ -572,6 +524,11 @@ function selectAlternative(depositId, withdrawalId) {
 
     // Hide alternatives
     toggleAlternatives(depositId);
+
+    // Re-validate selection in case this created or resolved duplicates
+    if (typeof updateMergeButton === 'function') {
+        updateMergeButton();
+    }
 }
 
 function formatDate(dateStr) {
