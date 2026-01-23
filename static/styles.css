@@ -297,6 +297,22 @@ h3 {
     margin: 0;
 }
 
+/* Unavailable match (withdrawal already merged elsewhere) */
+.match-unavailable {
+    opacity: 0.5;
+    background: #f5f5f5;
+}
+
+.match-unavailable td {
+    color: #999;
+    font-style: italic;
+}
+
+.match-unavailable .no-match {
+    color: #999;
+    font-style: italic;
+}
+
 .search-form button.htmx-request {
     background: #85c1e9;
 }
