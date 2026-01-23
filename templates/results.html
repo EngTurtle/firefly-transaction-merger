@@ -259,12 +259,20 @@ let updateMergeButton;
                     const status = await statusResponse.json();
 
                     if (status.status === 'completed') {
+                        // Remove this withdrawal from all other deposits' alternatives
+                        updateRowsAfterWithdrawalMerge(withdrawalId);
+
                         row.outerHTML = `<tr class="merge-success"><td colspan="10">
                             Merged successfully! Created transfer from ${status.result.source_name}
                             to ${status.result.destination_name}.
                         </td></tr>`;
                         completed++;
                         jobComplete = true;
+
+                        // Re-validate selection in case removing this withdrawal resolved duplicates
+                        if (typeof updateMergeButton === 'function') {
+                            updateMergeButton();
+                        }
                     } else if (status.status === 'failed') {
                         // Use raw API error message when available, fall back to full error
                         const apiErrorMessage = status.api_error_message || status.error || 'Unknown error occurred';
@@ -386,10 +394,19 @@ let updateMergeButton;
                     const status = await statusResponse.json();
 
                     if (status.status === 'completed') {
+                        // Remove this withdrawal from all other deposits' alternatives
+                        updateRowsAfterWithdrawalMerge(withdrawalId);
+
                         row.outerHTML = `<tr class="merge-success"><td colspan="10">
                             Merged successfully! Created transfer from ${status.result.source_name}
                             to ${status.result.destination_name}.
                         </td></tr>`;
+
+                        // Re-validate selection in case removing this withdrawal resolved duplicates
+                        if (typeof updateMergeButton === 'function') {
+                            updateMergeButton();
+                        }
+
                         break;
                     } else if (status.status === 'failed') {
                         // Determine error severity based on error_type
@@ -424,6 +441,122 @@ let updateMergeButton;
 })();
 
 // Alternative matches functions
+function updateRowsAfterWithdrawalMerge(withdrawalId) {
+    // Check all rows to see if this withdrawal is used as primary or alternative
+    const allRows = document.querySelectorAll('tr[data-deposit-id]');
+
+    allRows.forEach(row => {
+        const rowId = row.id;
+        if (!rowId) return;
+
+        // Extract current primary withdrawal ID from row ID (row-{depositId}-{withdrawalId})
+        const parts = rowId.split('-');
+        const currentPrimaryWithdrawalId = parts[2];
+
+        // Case 1: This withdrawal is the PRIMARY match for this row
+        if (currentPrimaryWithdrawalId === withdrawalId) {
+            const alternatives = row.dataset.alternatives ? JSON.parse(row.dataset.alternatives) : [];
+
+            if (alternatives.length > 0) {
+                // Promote first alternative to primary
+                const newPrimary = alternatives[0];
+                const remainingAlternatives = alternatives.slice(1);
+                const depositId = row.dataset.depositId;
+                const cells = row.querySelectorAll('td');
+
+                // Update row ID
+                row.id = `row-${depositId}-${newPrimary.withdrawal.id}`;
+
+                // Update withdrawal columns
+                const dateCell = cells[1];
+                if (remainingAlternatives.length > 0) {
+                    dateCell.innerHTML = `<span class="withdrawal-date">${formatDate(newPrimary.withdrawal_split.date)}</span> <span class="alt-indicator">⚠️ +${remainingAlternatives.length}</span>`;
+                } else {
+                    dateCell.innerHTML = `<span class="withdrawal-date">${formatDate(newPrimary.withdrawal_split.date)}</span>`;
+                    // Remove has-alts styling
+                    row.querySelectorAll('.has-alts').forEach(cell => {
+                        cell.classList.remove('has-alts');
+                        cell.removeAttribute('onclick');
+                        cell.removeAttribute('title');
+                    });
+                    row.classList.remove('has-alternatives');
+                }
+
+                cells[2].textContent = newPrimary.withdrawal_split.source_name;
+                cells[3].textContent = newPrimary.withdrawal_split.description;
+                cells[8].textContent = newPrimary.days_apart;
+
+                // Update checkbox value
+                const checkbox = cells[0].querySelector('.merge-checkbox');
+                checkbox.value = `${depositId}:${newPrimary.withdrawal.id}`;
+
+                // Update merge button
+                const mergeBtn = row.querySelector('.merge-btn');
+                mergeBtn.dataset.withdrawalId = newPrimary.withdrawal.id;
+                mergeBtn.setAttribute('data-withdrawal-id', newPrimary.withdrawal.id);
+
+                // Update alternatives list
+                row.dataset.alternatives = JSON.stringify(remainingAlternatives);
+            } else {
+                // No alternatives - disable the row
+                const cells = row.querySelectorAll('td');
+
+                // Clear withdrawal info and show "No longer available"
+                cells[1].innerHTML = '<span class="no-match">—</span>';
+                cells[2].innerHTML = '<span class="no-match">No match available</span>';
+                cells[3].innerHTML = '<span class="no-match">Withdrawal already merged</span>';
+                cells[8].textContent = '—';
+
+                // Disable checkbox
+                const checkbox = row.querySelector('.merge-checkbox');
+                if (checkbox) {
+                    checkbox.disabled = true;
+                    checkbox.checked = false;
+                }
+
+                // Disable merge button
+                const mergeBtn = row.querySelector('.single-merge-btn');
+                if (mergeBtn) {
+                    mergeBtn.disabled = true;
+                    mergeBtn.textContent = 'Unavailable';
+                }
+
+                // Add disabled styling
+                row.classList.add('match-unavailable');
+            }
+        } else {
+            // Case 2: This withdrawal is in the alternatives list
+            if (row.dataset.alternatives) {
+                const alternatives = JSON.parse(row.dataset.alternatives);
+                const filteredAlternatives = alternatives.filter(alt => alt.withdrawal.id !== withdrawalId);
+
+                // Only update if something was removed
+                if (filteredAlternatives.length < alternatives.length) {
+                    row.dataset.alternatives = JSON.stringify(filteredAlternatives);
+
+                    // Update the alternative indicator count
+                    const altIndicator = row.querySelector('.alt-indicator');
+                    if (filteredAlternatives.length === 0) {
+                        // No more alternatives - remove indicator and has-alts class
+                        if (altIndicator) {
+                            altIndicator.remove();
+                        }
+                        row.querySelectorAll('.has-alts').forEach(cell => {
+                            cell.classList.remove('has-alts');
+                            cell.removeAttribute('onclick');
+                            cell.removeAttribute('title');
+                        });
+                        row.classList.remove('has-alternatives');
+                    } else if (altIndicator) {
+                        // Update count
+                        altIndicator.textContent = `⚠️ +${filteredAlternatives.length}`;
+                    }
+                }
+            }
+        }
+    });
+}
+
 function toggleAlternatives(depositId) {
     const mainRow = document.querySelector(`tr[data-deposit-id="${depositId}"]`);
     const altRow = document.getElementById(`alt-row-${depositId}`);
