@@ -1,21 +1,9 @@
 """Transaction matching logic for finding withdrawal/deposit pairs."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
-
-
-@dataclass
-class MatchedPair:
-    """A matched deposit/withdrawal pair."""
-
-    deposit: dict[str, Any]
-    withdrawal: dict[str, Any]
-    deposit_split: dict[str, Any]
-    withdrawal_split: dict[str, Any]
-    amount: Decimal
-    days_apart: int
 
 
 @dataclass
@@ -25,22 +13,6 @@ class WithdrawalMatch:
     withdrawal: dict[str, Any]
     withdrawal_split: dict[str, Any]
     days_apart: int
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dictionary."""
-        # Create a copy of the splits to avoid modifying the original
-        withdrawal_split_copy = self.withdrawal_split.copy()
-
-        # Convert datetime to string
-        if "date" in withdrawal_split_copy:
-            date_obj = withdrawal_split_copy["date"]
-            withdrawal_split_copy["date"] = date_obj.strftime("%Y-%m-%d") if hasattr(date_obj, "strftime") else str(date_obj)
-
-        return {
-            "withdrawal": self.withdrawal,
-            "withdrawal_split": withdrawal_split_copy,
-            "days_apart": self.days_apart,
-        }
 
 
 @dataclass
@@ -52,11 +24,6 @@ class MatchedPairWithAlternatives:
     primary_match: WithdrawalMatch
     alternatives: list[WithdrawalMatch]
     amount: Decimal
-
-
-def parse_date(date_value: datetime) -> date:
-    """Extract date from datetime returned by Firefly III API client."""
-    return date_value.date()
 
 
 def count_business_days(start: date, end: date) -> int:
@@ -110,7 +77,7 @@ def find_matching_pairs(
             continue
 
         deposit_amount = Decimal(deposit_split.get("amount", "0"))
-        deposit_date = parse_date(deposit_split.get("date", ""))
+        deposit_date = deposit_split["date"].date()
         deposit_dest_id = deposit_split.get("destination_id")
         deposit_currency = deposit_split.get("currency_id")
 
@@ -124,7 +91,7 @@ def find_matching_pairs(
                 continue
 
             withdrawal_amount = Decimal(withdrawal_split.get("amount", "0"))
-            withdrawal_date = parse_date(withdrawal_split.get("date", ""))
+            withdrawal_date = withdrawal_split["date"].date()
             withdrawal_source_id = withdrawal_split.get("source_id")
             withdrawal_currency = withdrawal_split.get("currency_id")
 
@@ -248,7 +215,7 @@ def prepare_merge_update(
     record = [
         f"Merged with deleted {later_type} #{later_id}:",
         f"- Description: {later_split.get('description')}",
-        f"- Date: {parse_date(later_split['date']).isoformat()}",
+        f"- Date: {later_split['date'].date().isoformat()}",
     ]
 
     for field in MERGE_FILL_FIELDS:
