@@ -38,6 +38,8 @@ docker run -p 8000:8000 --read-only --user 65534:65534 \
   ghcr.io/engturtle/firefly-transaction-merger:latest
 ```
 
+To pin a release, replace `latest` with a full version (`MAJOR.MINOR.PATCH`), or with `MAJOR.MINOR` to also get patch releases. See the [published tags](https://github.com/EngTurtle/firefly-transaction-merger/pkgs/container/firefly-transaction-merger).
+
 ### Environment Variables
 
 | Variable | Description | Default |
@@ -94,6 +96,16 @@ uv run pytest --cov=matcher --cov-report=term-missing
 ```bash
 docker build -t firefly-transaction-merger .
 ```
+
+### Releasing
+
+Pushes to `main` publish the `latest` image. To publish a versioned image, set `version` in `pyproject.toml`, merge it to `main`, then tag that commit:
+
+```bash
+git tag vMAJOR.MINOR.PATCH && git push origin vMAJOR.MINOR.PATCH
+```
+
+The build fails if the tag doesn't match the `pyproject.toml` version.
 
 ## Acknowledgements
 
