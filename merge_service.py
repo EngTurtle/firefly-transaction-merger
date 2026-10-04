@@ -9,7 +9,7 @@ from typing import Optional
 
 import firefly_client
 from firefly_iii_client.rest import ApiException
-from matcher import parse_date, prepare_merge_update
+from matcher import prepare_merge_update
 from utils import DEBUG, log_exception
 
 
@@ -48,86 +48,10 @@ class MergeJob:
     error_type: Optional[str] = None  # "update_failed", "delete_failed_after_update", "other"
     api_error_message: Optional[str] = None  # Raw API error message for display
     result: Optional[dict] = None
-    created_at: float = 0.0
     completed_at: Optional[float] = None
 
 
-# In-memory job store
 job_store: dict[str, MergeJob] = {}
-
-
-def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
-    """Merge a deposit/withdrawal pair into a transfer (synchronous).
-
-    Args:
-        client: Firefly API client
-        deposit_id: ID of deposit transaction
-        withdrawal_id: ID of withdrawal transaction
-
-    Returns:
-        dict with source_name and destination_name on success
-
-    Raises:
-        Exception on failure
-    """
-    # Fetch both transactions
-    deposit = firefly_client.get_transaction(client, deposit_id)
-    withdrawal = firefly_client.get_transaction(client, withdrawal_id)
-
-    deposit_split = deposit.get("attributes", {}).get("transactions", [{}])[0]
-    withdrawal_split = withdrawal.get("attributes", {}).get("transactions", [{}])[0]
-
-    deposit_date = parse_date(deposit_split.get("date", ""))
-    withdrawal_date = parse_date(withdrawal_split.get("date", ""))
-
-    # Determine which is earlier
-    is_deposit_earlier = deposit_date <= withdrawal_date
-
-    if is_deposit_earlier:
-        earlier_id = deposit_id
-        earlier_split = deposit_split
-        later_id = withdrawal_id
-        later_split = withdrawal_split
-    else:
-        earlier_id = withdrawal_id
-        earlier_split = withdrawal_split
-        later_id = deposit_id
-        later_split = deposit_split
-
-    # Prepare and apply update
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
-
-    # CRITICAL: Delete MUST only happen if update succeeds
-    # If update fails, wrap in custom exception and propagate
-    try:
-        firefly_client.update_transaction(client, earlier_id, update_data)
-    except ApiException as e:
-        raise MergeUpdateError(
-            f"Failed to update transaction {earlier_id} to transfer. "
-            f"Original error: {type(e).__name__}: {str(e)}"
-        ) from e
-
-    # Update succeeded - now safe to delete the later transaction
-    try:
-        firefly_client.delete_transaction(client, later_id)
-    except ApiException as e:
-        # Delete failed but update succeeded - this is a critical problem
-        # The earlier transaction is now a transfer, but later one still exists
-        logger = logging.getLogger(__name__)
-        logger.error(
-            f"CRITICAL: Updated transaction {earlier_id} to transfer, "
-            f"but failed to delete {later_id}. Manual cleanup required."
-        )
-        raise MergeDeleteError(
-            f"CRITICAL: Successfully updated transaction {earlier_id} to transfer, "
-            f"but failed to delete transaction {later_id}. Manual cleanup required. "
-            f"Original error: {type(e).__name__}: {str(e)}"
-        ) from e
-
-    return {
-        "source_name": withdrawal_split.get("source_name", "Unknown"),
-        "destination_name": deposit_split.get("destination_name", "Unknown"),
-    }
 
 
 async def merge_pair_async(
@@ -136,23 +60,11 @@ async def merge_pair_async(
     deposit_id: str,
     withdrawal_id: str,
 ) -> dict:
-    """Merge a deposit/withdrawal pair into a transfer (async).
+    """Merge a deposit/withdrawal pair into a transfer.
 
-    Runs blocking I/O operations in thread pool to avoid blocking event loop.
-
-    Args:
-        firefly_url: Firefly III instance URL
-        firefly_token: API token
-        deposit_id: ID of deposit transaction
-        withdrawal_id: ID of withdrawal transaction
-
-    Returns:
-        dict with source_name and destination_name on success
-
-    Raises:
-        Exception on failure
+    Firefly API calls run in a thread pool so they don't block the event loop.
+    Returns the transfer's source_name and destination_name.
     """
-    # Create client
     client = firefly_client.create_client(firefly_url, firefly_token)
 
     # Fetch both transactions (run in thread pool to avoid blocking)
@@ -166,10 +78,9 @@ async def merge_pair_async(
     deposit_split = deposit.get("attributes", {}).get("transactions", [{}])[0]
     withdrawal_split = withdrawal.get("attributes", {}).get("transactions", [{}])[0]
 
-    deposit_date = parse_date(deposit_split.get("date", ""))
-    withdrawal_date = parse_date(withdrawal_split.get("date", ""))
+    deposit_date = deposit_split["date"].date()
+    withdrawal_date = withdrawal_split["date"].date()
 
-    # Determine which is earlier
     is_deposit_earlier = deposit_date <= withdrawal_date
 
     if is_deposit_earlier:
@@ -183,8 +94,7 @@ async def merge_pair_async(
         later_id = deposit_id
         later_split = deposit_split
 
-    # Prepare and apply update (run in thread pool)
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
+    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier, later_id)
 
     # CRITICAL: Delete MUST only happen if update succeeds
     # If update fails, wrap in custom exception and propagate
@@ -235,18 +145,15 @@ async def process_merge_job(job_id: str) -> None:
         return
 
     try:
-        # Update status to processing
         job.status = JobStatus.PROCESSING
         logger.info(
             f"Processing merge job {job_id}: {job.deposit_id}/{job.withdrawal_id}"
         )
 
-        # Perform the merge
         result = await merge_pair_async(
             job.firefly_url, job.firefly_token, job.deposit_id, job.withdrawal_id
         )
 
-        # Update job with success
         job.status = JobStatus.COMPLETED
         job.result = result
         job.completed_at = time.time()

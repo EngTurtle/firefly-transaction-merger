@@ -118,7 +118,7 @@
 
 <script>
 // Global reference to updateMergeButton so selectAlternative can call it
-let updateMergeButton;
+var updateMergeButton;  // var, not let: htmx re-runs this script on every search
 
 (function() {
     const selectAll = document.getElementById('select-all');
@@ -186,10 +186,50 @@ let updateMergeButton;
         cb.addEventListener('change', updateMergeButton);
     });
 
+    function showRowError(row, message, errorClass = 'merge-error') {
+        row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
+            <span class="error">${message}</span>
+            <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
+        </td></tr>`;
+    }
+
+    function showRowSuccess(row, withdrawalId, result) {
+        // Remove this withdrawal from all other deposits' alternatives
+        updateRowsAfterWithdrawalMerge(withdrawalId);
+        row.outerHTML = `<tr class="merge-success"><td colspan="10">
+            Merged successfully! Created transfer from ${result.source_name}
+            to ${result.destination_name}.
+        </td></tr>`;
+        // Re-validate selection in case removing this withdrawal resolved duplicates
+        updateMergeButton();
+    }
+
+    // Submit a merge job and poll until it finishes. Returns the final job
+    // status, the submit response if it was refused (status 'error'), or null
+    // if isStopped() turns true while polling.
+    async function runMerge(depositId, withdrawalId, onQueued = () => {}, isStopped = () => false) {
+        const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {method: 'POST'});
+        const data = await response.json();
+        if (!data.job_id) {
+            return {status: 'error', error: data.error || `Merge request rejected (HTTP ${response.status})`};
+        }
+        onQueued();
+
+        while (!isStopped()) {
+            const status = await (await fetch(`/job-status/${data.job_id}`)).json();
+            // Jobs live in server memory, so a server restart loses them
+            if (status.status === 'not_found') {
+                return {status: 'failed', error: 'Lost track of this merge job (the server may have restarted). Check Firefly III before retrying.'};
+            }
+            if (status.status === 'completed' || status.status === 'failed') return status;
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        return null;
+    }
+
     // Bulk merge state management
     let isMerging = false;
     let shouldStop = false;
-    let currentMergeIndex = 0;
 
     mergeBtn.addEventListener('click', async function() {
         const checkedBoxes = Array.from(document.querySelectorAll('.merge-checkbox:checked'));
@@ -219,7 +259,6 @@ let updateMergeButton;
 
         const totalCount = checkedBoxes.length;
         let completed = 0;
-        const pollInterval = 500;
 
         // Process each pair sequentially
         for (let i = 0; i < checkedBoxes.length; i++) {
@@ -232,97 +271,50 @@ let updateMergeButton;
             const row = document.getElementById(`row-${depositId}-${withdrawalId}`);
 
             try {
-                // Mark row as processing
                 row.classList.add('processing');
+                const status = await runMerge(depositId, withdrawalId, undefined, () => shouldStop);
+                if (status === null) break;
+                completed++;
 
-                // Submit job
-                const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {
-                    method: 'POST'
-                });
-                const data = await response.json();
+                if (status.status === 'completed') {
+                    showRowSuccess(row, withdrawalId, status.result);
+                } else if (status.status === 'error') {
+                    showRowError(row, status.error);
+                } else {
+                    // Use raw API error message when available, fall back to full error
+                    const apiErrorMessage = status.api_error_message || status.error || 'Unknown error occurred';
 
-                if (data.error) {
-                    row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                        <span class="error">${data.error}</span>
-                        <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                    </td></tr>`;
-                    completed++;
-                    continue;
-                }
+                    // Determine error class and alert message based on error_type
+                    let errorClass = 'merge-error';
+                    let alertMessage = '';
 
-                // Poll for job completion
-                const jobId = data.job_id;
-                let jobComplete = false;
-
-                while (!jobComplete && !shouldStop) {
-                    const statusResponse = await fetch(`/job-status/${jobId}`);
-                    const status = await statusResponse.json();
-
-                    if (status.status === 'completed') {
-                        // Remove this withdrawal from all other deposits' alternatives
-                        updateRowsAfterWithdrawalMerge(withdrawalId);
-
-                        row.outerHTML = `<tr class="merge-success"><td colspan="10">
-                            Merged successfully! Created transfer from ${status.result.source_name}
-                            to ${status.result.destination_name}.
-                        </td></tr>`;
-                        completed++;
-                        jobComplete = true;
-
-                        // Re-validate selection in case removing this withdrawal resolved duplicates
-                        if (typeof updateMergeButton === 'function') {
-                            updateMergeButton();
-                        }
-                    } else if (status.status === 'failed') {
-                        // Use raw API error message when available, fall back to full error
-                        const apiErrorMessage = status.api_error_message || status.error || 'Unknown error occurred';
-
-                        // Determine error class and alert message based on error_type
-                        let errorClass = 'merge-error';
-                        let alertMessage = '';
-
-                        if (status.error_type === 'delete_failed_after_update') {
-                            errorClass = 'merge-critical-error';
-                            alertMessage = 'CRITICAL ERROR: A merge partially completed (update succeeded but delete failed).\n\n' +
-                                         'A transaction was successfully converted to a transfer, but the duplicate transaction was NOT deleted.\n\n' +
-                                         'Stopping all remaining merges. Check Firefly III for duplicate transactions needing manual cleanup.';
-                        } else if (status.error_type === 'update_failed') {
-                            errorClass = 'merge-error';
-                            alertMessage = 'ERROR: Failed to update transaction to transfer.\n\n' +
-                                         'This could indicate API connection issues, permission problems, or invalid transaction state.\n\n' +
-                                         'Stopping all remaining merges to prevent cascading failures.';
-                        } else {
-                            errorClass = 'merge-error';
-                            alertMessage = 'ERROR: An unexpected error occurred during merge.\n\n' +
-                                         'Stopping all remaining merges for safety.';
-                        }
-
-                        row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
-                            <span class="error">${apiErrorMessage}</span>
-                            <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                        </td></tr>`;
-                        completed++;
-                        jobComplete = true;
-
-                        // ALWAYS stop remaining merges on ANY error
-                        if (i < checkedBoxes.length - 1) {
-                            const remaining = checkedBoxes.length - i - 1;
-                            alert(alertMessage + `\n\n${remaining} merge(s) cancelled.`);
-                            shouldStop = true;
-                            break;
-                        }
+                    if (status.error_type === 'delete_failed_after_update') {
+                        errorClass = 'merge-critical-error';
+                        alertMessage = 'CRITICAL ERROR: A merge partially completed (update succeeded but delete failed).\n\n' +
+                                     'A transaction was successfully converted to a transfer, but the duplicate transaction was NOT deleted.\n\n' +
+                                     'Stopping all remaining merges. Check Firefly III for duplicate transactions needing manual cleanup.';
+                    } else if (status.error_type === 'update_failed') {
+                        alertMessage = 'ERROR: Failed to update transaction to transfer.\n\n' +
+                                     'This could indicate API connection issues, permission problems, or invalid transaction state.\n\n' +
+                                     'Stopping all remaining merges to prevent cascading failures.';
                     } else {
-                        // Still pending or processing, wait and poll again
-                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                        alertMessage = 'ERROR: An unexpected error occurred during merge.\n\n' +
+                                     'Stopping all remaining merges for safety.';
+                    }
+
+                    showRowError(row, apiErrorMessage, errorClass);
+
+                    // ALWAYS stop remaining merges on ANY error
+                    if (i < checkedBoxes.length - 1) {
+                        const remaining = checkedBoxes.length - i - 1;
+                        alert(alertMessage + `\n\n${remaining} merge(s) cancelled.`);
+                        shouldStop = true;
+                        break;
                     }
                 }
-
             } catch (error) {
                 console.error(`Failed to merge ${depositId}:${withdrawalId}`, error);
-                row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                    <span class="error">Failed: ${error.message}</span>
-                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                </td></tr>`;
+                showRowError(row, `Failed: ${error.message}`);
                 completed++;
 
                 // Stop remaining merges on network/submission errors
@@ -368,73 +360,32 @@ let updateMergeButton;
             this.querySelector('.default-text').textContent = 'Queuing...';
 
             try {
-                // Submit job
-                const response = await fetch(`/merge/${depositId}/${withdrawalId}`, {
-                    method: 'POST'
+                const status = await runMerge(depositId, withdrawalId, () => {
+                    this.querySelector('.default-text').textContent = 'Processing...';
+                    row.classList.add('processing');
                 });
-                const data = await response.json();
 
-                if (data.error) {
-                    row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                        <span class="error">${data.error}</span>
-                        <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                    </td></tr>`;
-                    return;
-                }
+                if (status.status === 'completed') {
+                    showRowSuccess(row, withdrawalId, status.result);
+                } else if (status.status === 'error') {
+                    showRowError(row, status.error);
+                } else {
+                    // Determine error severity based on error_type
+                    let errorClass = 'merge-error';
+                    let errorMessage = status.error || 'Unknown error occurred';
 
-                this.querySelector('.default-text').textContent = 'Processing...';
-                row.classList.add('processing');
-
-                // Poll for status
-                const jobId = data.job_id;
-                const pollInterval = 500;
-
-                while (true) {
-                    const statusResponse = await fetch(`/job-status/${jobId}`);
-                    const status = await statusResponse.json();
-
-                    if (status.status === 'completed') {
-                        // Remove this withdrawal from all other deposits' alternatives
-                        updateRowsAfterWithdrawalMerge(withdrawalId);
-
-                        row.outerHTML = `<tr class="merge-success"><td colspan="10">
-                            Merged successfully! Created transfer from ${status.result.source_name}
-                            to ${status.result.destination_name}.
-                        </td></tr>`;
-
-                        // Re-validate selection in case removing this withdrawal resolved duplicates
-                        if (typeof updateMergeButton === 'function') {
-                            updateMergeButton();
-                        }
-
-                        break;
-                    } else if (status.status === 'failed') {
-                        // Determine error severity based on error_type
-                        let errorClass = 'merge-error';
-                        let errorMessage = status.error || 'Unknown error occurred';
-
-                        if (status.error_type === 'delete_failed_after_update') {
-                            errorClass = 'merge-critical-error';
-                            errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
-                        } else if (status.error_type === 'update_failed') {
-                            errorMessage = 'Update failed: ' + errorMessage;
-                        }
-
-                        row.outerHTML = `<tr class="${errorClass}"><td colspan="10">
-                            <span class="error">${errorMessage}</span>
-                            <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                        </td></tr>`;
-                        break;
+                    if (status.error_type === 'delete_failed_after_update') {
+                        errorClass = 'merge-critical-error';
+                        errorMessage = '⚠️ CRITICAL ERROR: ' + errorMessage;
+                    } else if (status.error_type === 'update_failed') {
+                        errorMessage = 'Update failed: ' + errorMessage;
                     }
 
-                    await new Promise(resolve => setTimeout(resolve, pollInterval));
+                    showRowError(row, errorMessage, errorClass);
                 }
             } catch (error) {
                 console.error('Merge failed:', error);
-                row.outerHTML = `<tr class="merge-error"><td colspan="10">
-                    <span class="error">Merge failed: ${error.message}</span>
-                    <button onclick="this.parentElement.parentElement.remove()">Dismiss</button>
-                </td></tr>`;
+                showRowError(row, `Merge failed: ${error.message}`);
             }
         });
     });

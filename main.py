@@ -5,8 +5,8 @@ import json
 import logging
 import os
 import secrets
-import time
 import uuid
+from dataclasses import asdict
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -26,7 +26,7 @@ from merge_service import (
     job_store,
     process_merge_job,
 )
-from utils import DEBUG, handle_errors, json_serial, log_exception
+from utils import DEBUG, json_serial, log_exception
 
 # Configure logging for app modules
 _log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -175,10 +175,8 @@ async def search(
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
 
-        # Fetch deposits
         deposits = firefly_client.get_transactions(client, "deposit", start, end, limit)
 
-        # Sort by date
         deposits.sort(
             key=lambda x: x.get("attributes", {}).get("transactions", [{}])[0].get(
                 "date", ""
@@ -206,21 +204,13 @@ async def search(
                 in account_ids
             ]
 
-        # Find matches
         matches = find_matching_pairs(deposits, withdrawals, business_days)
 
         # Pre-serialize alternatives to JSON strings for template
         for match in matches:
-            # Convert WithdrawalMatch objects to dicts and serialize with custom handler
-            alternatives_dicts = [
-                {
-                    "withdrawal": alt.withdrawal,
-                    "withdrawal_split": alt.withdrawal_split,
-                    "days_apart": alt.days_apart,
-                }
-                for alt in match.alternatives
-            ]
-            match.alternatives_json = json.dumps(alternatives_dicts, default=json_serial)
+            match.alternatives_json = json.dumps(
+                [asdict(alt) for alt in match.alternatives], default=json_serial
+            )
 
         return templates.TemplateResponse(
             "results.html", {"request": request, "matches": matches}
@@ -247,14 +237,12 @@ async def submit_merge(
     background_tasks: BackgroundTasks,
 ):
     """Submit a merge job to background tasks and return job ID."""
-    # Get credentials from session
     firefly_url = request.session.get("firefly_url")
     firefly_token = request.session.get("firefly_token")
 
     if not firefly_url or not firefly_token:
         return {"error": "Session expired", "status": "error"}
 
-    # Create job
     job_id = str(uuid.uuid4())
     job = MergeJob(
         job_id=job_id,
@@ -262,13 +250,10 @@ async def submit_merge(
         withdrawal_id=withdrawal_id,
         firefly_url=firefly_url,
         firefly_token=firefly_token,
-        created_at=time.time(),
     )
 
-    # Store job
     job_store[job_id] = job
 
-    # Add background task
     background_tasks.add_task(process_merge_job, job_id)
 
     return {"job_id": job_id, "status": "queued"}

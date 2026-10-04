@@ -14,7 +14,6 @@ from firefly_iii_client import (
 )
 from firefly_iii_client.configuration import Configuration
 from firefly_iii_client.exceptions import UnauthorizedException
-from firefly_iii_client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
