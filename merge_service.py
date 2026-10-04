@@ -95,7 +95,7 @@ def merge_pair(client, deposit_id: str, withdrawal_id: str) -> dict:
         later_split = deposit_split
 
     # Prepare and apply update
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
+    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier, later_id)
 
     # CRITICAL: Delete MUST only happen if update succeeds
     # If update fails, wrap in custom exception and propagate
@@ -184,7 +184,7 @@ async def merge_pair_async(
         later_split = deposit_split
 
     # Prepare and apply update (run in thread pool)
-    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier)
+    update_data = prepare_merge_update(earlier_split, later_split, is_deposit_earlier, later_id)
 
     # CRITICAL: Delete MUST only happen if update succeeds
     # If update fails, wrap in custom exception and propagate
